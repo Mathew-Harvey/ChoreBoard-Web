@@ -10,7 +10,7 @@ import { FamilyDashboard } from '../desktops/FamilyDashboard';
 import { BudgetDesktop } from '../desktops/BudgetDesktop';
 import { MemberDashboard } from '../desktops/MemberDashboard';
 import { ChampionBanner } from '../ui/ChampionBanner';
-import { PageTag, Wordmark } from '../ui/primitives';
+import { MemberAvatar, PageTag, Wordmark } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
 import { TVMode } from './TVMode';
 
@@ -147,7 +147,7 @@ export function Desktops() {
         onTv={goTv}
       />
 
-      <DotIndicator desktops={desktops} idx={idx} onPick={setIdx} />
+      <DesktopTabs desktops={desktops} idx={idx} onPick={setIdx} />
 
       <main id="cb-main" className="flex-1 overflow-hidden">
         {desktop?.kind === 'kanban' && (
@@ -423,7 +423,18 @@ function formatPayoutShort(iso: string): string {
   return `${day} ${hour}`;
 }
 
-function DotIndicator({
+/**
+ * Horizontal desktop tab bar.
+ *
+ * Previously this was a row of unlabeled dots that only revealed labels on
+ * hover or while active — at small sizes the active label collided with its
+ * neighbor's hover label, and the elongated active pill visually clipped
+ * its own text. We now show a chunky always-labeled tab per desktop: the
+ * active one becomes a filled pill (tinted with the member color for
+ * member tabs), inactive ones are quiet ghost buttons. Members get a small
+ * avatar so you can identify whose desktop is whose at a glance.
+ */
+function DesktopTabs({
   desktops,
   idx,
   onPick,
@@ -432,44 +443,65 @@ function DotIndicator({
   idx: number;
   onPick: (n: number) => void;
 }) {
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Keep the active tab in view when navigation happens via arrow keys or
+  // swipe — otherwise users on narrow screens can lose track of where they
+  // are in the carousel.
+  useEffect(() => {
+    const el = itemRefs.current[idx];
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  }, [idx]);
+
   return (
     <nav
       data-chrome="dots"
-      className="sticky z-20 flex items-center justify-center gap-2 border-b-2 border-ink-900/15 bg-cream-100/85 px-4 py-2.5 backdrop-blur-md sm:py-3"
+      className="sticky z-20 border-b-2 border-ink-900/15 bg-cream-100/85 backdrop-blur-md"
       style={{ top: 'calc(env(safe-area-inset-top, 0px) + 60px)' }}
       aria-label="Desktops"
     >
-      <div className="flex max-w-full items-center gap-2 overflow-x-auto px-2 py-1">
-        {desktops.map((d, i) => {
-          const active = i === idx;
-          const color = d.kind === 'member' ? d.color ?? undefined : undefined;
-          const label = labelFor(d);
-          return (
-            <button
-              key={i}
-              onClick={() => onPick(i)}
-              className="group relative flex items-center px-1 py-1.5 tap-target"
-              aria-label={label}
-              aria-current={active ? 'page' : undefined}
-            >
-              <span
-                className={`rounded-full transition-all ${
-                  active ? 'h-3 w-8 sm:h-3.5 sm:w-10' : 'h-3 w-3'
-                }`}
-                style={{
-                  backgroundColor: active ? color ?? '#10182B' : 'rgba(16,24,43,0.25)',
+      <div className="mx-auto max-w-[1800px] px-2 sm:px-5">
+        <div className="h-scroll-fade flex items-center gap-1.5 overflow-x-auto py-2 sm:gap-2 sm:py-2.5">
+          {desktops.map((d, i) => {
+            const active = i === idx;
+            const color = d.kind === 'member' ? d.color ?? undefined : undefined;
+            const label = labelFor(d);
+            const glyph = glyphFor(d);
+            return (
+              <button
+                key={i}
+                ref={(el) => {
+                  itemRefs.current[i] = el;
                 }}
-              />
-              <span
-                className={`pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider text-ink-700 transition-opacity sm:top-8 ${
-                  active ? 'opacity-90' : 'opacity-0 group-hover:opacity-60'
+                type="button"
+                onClick={() => onPick(i)}
+                aria-current={active ? 'page' : undefined}
+                aria-label={`Open ${label}`}
+                className={`group relative flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition tap-target sm:gap-2 sm:px-3.5 sm:text-[13px] ${
+                  active
+                    ? 'text-cream-50 ring-2 ring-ink-900 shadow-paper-sm'
+                    : 'text-ink-700 ring-2 ring-transparent hover:bg-ink-900/5 hover:text-ink-900'
                 }`}
+                style={active ? { backgroundColor: color ?? '#10182B' } : undefined}
               >
-                {label}
-              </span>
-            </button>
-          );
-        })}
+                {d.kind === 'member' ? (
+                  <MemberAvatar
+                    name={d.name}
+                    color={color}
+                    size="xs"
+                    className="!h-5 !w-5 !text-[10px] !ring-1"
+                  />
+                ) : (
+                  <span aria-hidden className="text-sm leading-none">
+                    {glyph}
+                  </span>
+                )}
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );
@@ -480,4 +512,11 @@ function labelFor(d: Desktop): string {
   if (d.kind === 'family') return 'Family';
   if (d.kind === 'budget') return 'Budget';
   return d.name;
+}
+
+function glyphFor(d: Desktop): string {
+  if (d.kind === 'kanban') return '🗂';
+  if (d.kind === 'family') return '🏡';
+  if (d.kind === 'budget') return '💰';
+  return '👤';
 }
