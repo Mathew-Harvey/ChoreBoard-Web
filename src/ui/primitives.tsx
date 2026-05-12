@@ -2,23 +2,27 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { BoardInstance, InstanceStatus, MemberType } from '../lib/types';
 import { money, relativePast } from '../lib/format';
 
-/** The "ChoreBoard" wordmark + tomato/peach logo block from the guide. */
-export function Wordmark({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
+/** The "ChoreBoard" wordmark + tile logo block from the guide. */
+export function Wordmark({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' | 'xl' }) {
   const dims =
-    size === 'lg'
-      ? { box: 'h-9 w-9 text-base', text: 'text-2xl' }
-      : size === 'sm'
-        ? { box: 'h-6 w-6 text-[10px]', text: 'text-base' }
-        : { box: 'h-7 w-7 text-xs', text: 'text-lg' };
+    size === 'xl'
+      ? { box: 'h-11 w-11 text-lg', text: 'text-3xl' }
+      : size === 'lg'
+        ? { box: 'h-9 w-9 text-base', text: 'text-2xl' }
+        : size === 'sm'
+          ? { box: 'h-6 w-6 text-[10px]', text: 'text-base' }
+          : { box: 'h-7 w-7 text-xs', text: 'text-lg' };
   return (
     <div className="flex items-center gap-2.5">
       <div
-        className={`${dims.box} grid place-items-center rounded-lg bg-accent-orange/85 font-bold text-white shadow-paper-sm ring-2 ring-ink-900`}
+        className={`${dims.box} grid place-items-center rounded-lg bg-accent-orange font-extrabold text-white shadow-paper-sm ring-2 ring-ink-900`}
         aria-hidden
       >
-        <span className="-mt-0.5">ⓒ</span>
+        <span className="-mt-px leading-none">C</span>
       </div>
-      <span className={`${dims.text} font-display font-bold tracking-tight text-ink-900`}>
+      <span
+        className={`${dims.text} font-display font-extrabold tracking-tight text-ink-900`}
+      >
         ChoreBoard
       </span>
     </div>
@@ -27,11 +31,22 @@ export function Wordmark({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
 
 /**
  * Top-right page indicator like `01 — KANBAN / The board` in the style guide.
+ * Hidden on small screens (chrome there is condensed).
  */
-export function PageTag({ index, label, title }: { index: number; label: string; title: string }) {
+export function PageTag({
+  index,
+  label,
+  title,
+  className = '',
+}: {
+  index: number;
+  label: string;
+  title: string;
+  className?: string;
+}) {
   const idx = String(index).padStart(2, '0');
   return (
-    <div className="text-right leading-tight">
+    <div className={`hidden text-right leading-tight md:block ${className}`}>
       <div className="page-tag">
         {idx} — {label}
       </div>
@@ -50,7 +65,7 @@ export function MemberAvatar({
 }: {
   name: string;
   color?: string;
-  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
   className?: string;
   style?: CSSProperties;
 }) {
@@ -63,7 +78,11 @@ export function MemberAvatar({
           ? 'h-14 w-14 text-lg'
           : size === 'xl'
             ? 'h-20 w-20 text-3xl'
-            : 'h-10 w-10 text-sm';
+            : size === '2xl'
+              ? 'h-28 w-28 text-5xl'
+              : size === '3xl'
+                ? 'h-40 w-40 text-7xl'
+                : 'h-10 w-10 text-sm';
   return (
     <div
       className={`grid place-items-center rounded-full font-bold text-white ring-2 ring-ink-900 shadow-paper-sm ${sz} ${className}`}
@@ -116,14 +135,20 @@ export function StatusPill({
 
 /**
  * The little leading icon block on each chore card. Color-tinted background
- * with an emoji glyph; falls back to a "tools" glyph.
+ * with an emoji glyph; falls back to a "tools" glyph. Scales on big screens.
  */
-export function ChoreIcon({ name }: { name: string }) {
+export function ChoreIcon({ name, size = 'md' }: { name: string; size?: 'sm' | 'md' | 'lg' }) {
   const glyph = chooseGlyph(name);
+  const sz =
+    size === 'sm'
+      ? 'h-8 w-8 text-sm'
+      : size === 'lg'
+        ? 'h-11 w-11 text-lg'
+        : 'h-9 w-9 text-base 2xl:h-10 2xl:w-10 2xl:text-lg';
   return (
     <div
       aria-hidden
-      className="grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-base ring-1 ring-ink-900/15"
+      className={`grid flex-shrink-0 place-items-center rounded-lg bg-cream-200 ring-1 ring-ink-900/15 ${sz}`}
     >
       <span className="leading-none">{glyph}</span>
     </div>
@@ -151,7 +176,7 @@ function chooseGlyph(n: string): string {
   return '🧼';
 }
 
-/** Layout helper: title row used on every desktop. */
+/** Layout helper: title row used on every desktop. Responsive on phones. */
 export function DesktopTitle({
   date,
   title,
@@ -164,15 +189,19 @@ export function DesktopTitle({
   right?: ReactNode;
 }) {
   return (
-    <div className="mb-4 flex items-end justify-between gap-4">
-      <div>
-        {date && <div className="page-tag mb-1">{date}</div>}
-        <h1 className="font-display text-3xl font-extrabold leading-none tracking-tight text-ink-900">
+    <div className="mb-4 flex flex-col items-stretch gap-3 sm:mb-5 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+      <div className="min-w-0">
+        {date && <div className="page-tag mb-1.5">{date}</div>}
+        <h1 className="font-display text-fluid-title font-extrabold text-ink-900">
           {title}
         </h1>
-        {subtitle && <p className="mt-1 text-sm text-ink-500">{subtitle}</p>}
+        {subtitle && (
+          <p className="mt-1.5 max-w-2xl text-sm text-ink-500 sm:text-base">
+            {subtitle}
+          </p>
+        )}
       </div>
-      {right}
+      {right && <div className="flex flex-shrink-0 items-end justify-end">{right}</div>}
     </div>
   );
 }
@@ -185,9 +214,16 @@ export function ProgressBar({
 }: {
   percent: number;
   color?: string;
-  height?: 'sm' | 'md' | 'lg';
+  height?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
-  const h = height === 'sm' ? 'h-2' : height === 'lg' ? 'h-4' : 'h-3';
+  const h =
+    height === 'sm'
+      ? 'h-2'
+      : height === 'lg'
+        ? 'h-4'
+        : height === 'xl'
+          ? 'h-5 lg:h-6'
+          : 'h-3';
   return (
     <div
       className={`${h} w-full overflow-hidden rounded-full bg-cream-200 ring-2 ring-ink-900`}
@@ -197,6 +233,7 @@ export function ProgressBar({
         style={{
           width: `${Math.max(0, Math.min(100, percent))}%`,
           backgroundColor: color ?? '#0F6E37',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18)',
         }}
       />
     </div>
@@ -229,7 +266,11 @@ export function DueHint({ instance }: { instance: BoardInstance }) {
   if (sameLocalDay(due, tomorrow)) {
     return <span className="text-xs text-ink-500">due tomorrow {clockShort(due)}</span>;
   }
-  return <span className="text-xs text-ink-500">due {due.toLocaleDateString(undefined, { weekday: 'short' })} {clockShort(due)}</span>;
+  return (
+    <span className="text-xs text-ink-500">
+      due {due.toLocaleDateString(undefined, { weekday: 'short' })} {clockShort(due)}
+    </span>
+  );
 }
 
 function sameLocalDay(a: Date, b: Date): boolean {
@@ -241,7 +282,10 @@ function sameLocalDay(a: Date, b: Date): boolean {
 }
 
 function clockShort(d: Date): string {
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: d.getMinutes() ? '2-digit' : undefined });
+  return d.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: d.getMinutes() ? '2-digit' : undefined,
+  });
 }
 
 export type MemberLookup = {
@@ -260,11 +304,29 @@ export function buildMemberLookup(
   };
 }
 
-/** Big "$45.50" headline used on the Family dashboard. */
+/** Big "$45.50" headline used on the Family dashboard. Fluid clamp scaling. */
 export function MoneyHeadline({ amountCents }: { amountCents: number }) {
   return (
-    <div className="font-display text-7xl font-extrabold tracking-tight text-money sm:text-8xl">
+    <div className="font-display text-fluid-money font-extrabold tabular-nums tracking-tight text-money">
       {money(amountCents)}
     </div>
+  );
+}
+
+/** Section heading used inside cards. */
+export function SectionTitle({
+  children,
+  right,
+}: {
+  children: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <header className="mb-3 flex items-baseline justify-between gap-3">
+      <h2 className="font-display text-base font-extrabold tracking-tight text-ink-900 sm:text-lg lg:text-xl">
+        {children}
+      </h2>
+      {right && <div className="text-xs text-ink-500">{right}</div>}
+    </header>
   );
 }

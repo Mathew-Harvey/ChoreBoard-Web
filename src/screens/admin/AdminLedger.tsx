@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../lib/api';
+import { api, ApiError } from '../../lib/api';
 import type { Family, Kid, LedgerEntry, MemberType, Parent } from '../../lib/types';
 import { money, relativePast } from '../../lib/format';
 import { MemberAvatar } from '../../ui/primitives';
+import { EmptyState } from '../../ui/EmptyState';
+import { toastError, toastMoney } from '../../ui/Toast';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -51,6 +53,10 @@ export function AdminLedger() {
       qc.invalidateQueries({ queryKey: ['leaderboard'] });
       qc.invalidateQueries({ queryKey: ['member'] });
       qc.invalidateQueries({ queryKey: ['goals'] });
+      toastMoney('Marked paid', 'Ledger updated.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t mark paid', err.message);
     },
   });
 
@@ -85,12 +91,12 @@ export function AdminLedger() {
   }, [entries.data, fam.data]);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6">
-      <header className="flex items-baseline justify-between">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="page-tag">LEDGER</div>
-          <h2 className="font-display text-3xl font-extrabold tracking-tight">
-            Ledger & payout
+          <div className="page-tag mb-1">LEDGER</div>
+          <h2 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
+            Ledger &amp; payout
           </h2>
         </div>
         <a className="btn-secondary" href="/api/ledger.csv" download>
@@ -98,28 +104,35 @@ export function AdminLedger() {
         </a>
       </header>
 
-      <section className="card p-6">
-        <h3 className="mb-3 font-display text-lg font-extrabold">
+      <section className="card p-5 sm:p-6">
+        <h3 className="mb-3 font-display text-lg font-extrabold sm:text-xl">
           Owed (unpaid) by member
         </h3>
         {totals.length === 0 ? (
-          <p className="text-sm text-ink-500">Nothing owed right now.</p>
+          <EmptyState
+            illustration="ledger"
+            compact
+            title="All paid up"
+            body="Nothing owed right now."
+          />
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
             {totals.map((t) => (
               <li
                 key={`${t.memberType}:${t.memberId}`}
-                className="flex items-center justify-between rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900"
+                className="flex flex-col items-stretch gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900 sm:flex-row sm:items-center sm:justify-between sm:p-4"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <MemberAvatar name={t.name} color={t.color} size="md" />
-                  <div>
-                    <div className="text-sm font-semibold">{t.name}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold sm:text-base">
+                      {t.name}
+                    </div>
                     <div className="text-xs text-ink-500">{t.count} chores</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="money-amt text-lg">{money(t.total)}</span>
+                <div className="flex flex-shrink-0 items-center justify-between gap-3 sm:justify-end">
+                  <span className="money-amt text-lg sm:text-xl">{money(t.total)}</span>
                   <button
                     className="btn-money"
                     onClick={() =>
@@ -136,26 +149,36 @@ export function AdminLedger() {
         )}
       </section>
 
-      <section className="card p-6">
-        <h3 className="mb-3 font-display text-lg font-extrabold">Unpaid line items</h3>
+      <section className="card p-5 sm:p-6">
+        <h3 className="mb-3 font-display text-lg font-extrabold sm:text-xl">
+          Unpaid line items
+        </h3>
         {(entries.data ?? []).length === 0 ? (
-          <p className="text-sm text-ink-500">No unpaid entries.</p>
+          <EmptyState
+            illustration="ledger"
+            compact
+            title="No unpaid entries"
+            body="Approved chores show up here while they’re still owed."
+          />
         ) : (
           <ul className="divide-y-2 divide-cream-200">
             {entries.data!.map((e) => {
               const meta = nameFor(e.memberType, e.memberId, fam.data);
               return (
-                <li key={e.id} className="flex items-center justify-between py-2">
-                  <div>
-                    <div className="text-sm font-semibold">{e.choreName}</div>
+                <li
+                  key={e.id}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{e.choreName}</div>
                     <div className="text-xs text-ink-500">
                       {meta.name} · {relativePast(e.earnedAt)}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-shrink-0 items-center gap-3">
                     <span className="money-amt text-sm">{money(e.amountCents)}</span>
                     <button
-                      className="btn-secondary !py-1.5"
+                      className="btn-secondary"
                       onClick={() => pay.mutate({ entryIds: [e.id] })}
                     >
                       Mark paid
@@ -168,10 +191,15 @@ export function AdminLedger() {
         )}
       </section>
 
-      <section className="card p-6">
-        <h3 className="mb-3 font-display text-lg font-extrabold">Past weeks</h3>
+      <section className="card p-5 sm:p-6">
+        <h3 className="mb-3 font-display text-lg font-extrabold sm:text-xl">Past weeks</h3>
         {(weeks.data ?? []).length === 0 ? (
-          <p className="text-sm text-ink-500">No closed weeks yet.</p>
+          <EmptyState
+            illustration="ledger"
+            compact
+            title="No closed weeks yet"
+            body="Once Sunday rolls around, this fills with payday snapshots."
+          />
         ) : (
           <ul className="flex flex-col gap-3">
             {weeks.data!.map((w) => {
@@ -204,24 +232,26 @@ export function AdminLedger() {
                       · {money(w.championAmountCents ?? 0)}
                     </div>
                   )}
-                  <ul className="flex flex-col gap-1.5">
+                  <ul className="flex flex-col gap-2">
                     {w.totals.map((t) => {
                       const meta = nameFor(t.memberType, t.memberId, fam.data);
                       return (
                         <li
                           key={`${w.id}-${t.memberType}-${t.memberId}`}
-                          className="flex items-center justify-between text-sm"
+                          className="flex items-center justify-between gap-3 text-sm"
                         >
-                          <span className="flex items-center gap-2">
+                          <span className="flex min-w-0 items-center gap-2">
                             <MemberAvatar name={meta.name} color={meta.color} size="xs" />
-                            <span>{meta.name}</span>
-                            <span className="text-xs text-ink-500">· {t.count} chores</span>
+                            <span className="truncate">{meta.name}</span>
+                            <span className="hidden text-xs text-ink-500 sm:inline">
+                              · {t.count} chores
+                            </span>
                           </span>
-                          <span className="flex items-center gap-2">
+                          <span className="flex flex-shrink-0 items-center gap-2">
                             <span className="money-amt">{money(t.totalCents)}</span>
                             {t.unpaidCents > 0 && (
                               <button
-                                className="btn-money !py-1"
+                                className="btn-money"
                                 onClick={() =>
                                   pay.mutate({
                                     weekId: w.id,

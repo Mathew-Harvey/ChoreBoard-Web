@@ -1,0 +1,26 @@
+{
+  "name": "ChoreBoard",
+  "short_name": "ChoreBoard",
+  "description": "A family Kanban that pays out Sunday.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6EED5",
+  "theme_color": "#F6EED5",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect x='8' y='8' width='176' height='176' rx='34' fill='%23E07E2E' stroke='%2310182B' stroke-width='10'/><text x='96' y='128' text-anchor='middle' font-size='110' font-family='system-ui' font-weight='800' fill='white'>C</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect x='24' y='24' width='464' height='464' rx='96' fill='%23E07E2E' stroke='%2310182B' stroke-width='24'/><text x='256' y='340' text-anchor='middle' font-size='300' font-family='system-ui' font-weight='800' fill='white'>C</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

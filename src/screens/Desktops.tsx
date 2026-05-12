@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useLogout, useSession } from '../lib/session';
+import { useSseStatus } from '../lib/sseStatus';
 import type { BoardResponse, LeaderboardResponse } from '../lib/types';
 import { KanbanDesktop } from '../desktops/KanbanDesktop';
 import { FamilyDashboard } from '../desktops/FamilyDashboard';
@@ -10,6 +11,8 @@ import { BudgetDesktop } from '../desktops/BudgetDesktop';
 import { MemberDashboard } from '../desktops/MemberDashboard';
 import { ChampionBanner } from '../ui/ChampionBanner';
 import { PageTag, Wordmark } from '../ui/primitives';
+import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
+import { TVMode } from './TVMode';
 
 type Desktop =
   | { kind: 'kanban' }
@@ -22,6 +25,8 @@ export function Desktops() {
   const logout = useLogout();
   const params = useParams<{ idx?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tvMode = searchParams.get('tv') === '1';
 
   const board = useQuery({
     queryKey: ['board'],
@@ -60,6 +65,7 @@ export function Desktops() {
   // Arrow-key + swipe navigation. Inputs and contentEditable elements get
   // a pass so typing $ values doesn't change desktop.
   const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
   useEffect(() => {
     const isTypable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
@@ -74,12 +80,16 @@ export function Desktops() {
     const onTouchStart = (e: TouchEvent) => {
       if (isTypable(e.target)) return;
       touchStartX.current = e.touches[0]?.clientX ?? null;
+      touchStartY.current = e.touches[0]?.clientY ?? null;
     };
     const onTouchEnd = (e: TouchEvent) => {
       if (touchStartX.current == null) return;
       const dx = (e.changedTouches[0]?.clientX ?? 0) - touchStartX.current;
+      const dy = (e.changedTouches[0]?.clientY ?? 0) - (touchStartY.current ?? 0);
       touchStartX.current = null;
-      if (Math.abs(dx) > 90) setIdx(idx + (dx < 0 ? 1 : -1));
+      touchStartY.current = null;
+      // Only treat as a horizontal swipe if vertical motion is small.
+      if (Math.abs(dx) > 90 && Math.abs(dy) < 60) setIdx(idx + (dx < 0 ? 1 : -1));
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('touchstart', onTouchStart);
@@ -104,8 +114,27 @@ export function Desktops() {
     return { label: 'MEMBER', title: `Member dashboard · ${desktop.name}` };
   })();
 
+  // TV mode short-circuits the entire desktop chrome.
+  if (tvMode) {
+    return (
+      <TVMode
+        onExit={() => {
+          const next = new URLSearchParams(searchParams);
+          next.delete('tv');
+          setSearchParams(next, { replace: true });
+        }}
+      />
+    );
+  }
+
+  const goTv = () => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tv', '1');
+    setSearchParams(next, { replace: false });
+  };
+
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col safe-pb">
       <TopBar
         familyName={board.data?.family.name}
         payoutAt={leaderboard.data?.payoutAt ?? null}
@@ -115,11 +144,12 @@ export function Desktops() {
         index={idx + 1}
         tagLabel={tag.label}
         tagTitle={tag.title}
+        onTv={goTv}
       />
 
       <DotIndicator desktops={desktops} idx={idx} onPick={setIdx} />
 
-      <main className="flex-1 overflow-hidden">
+      <main id="cb-main" className="flex-1 overflow-hidden">
         {desktop?.kind === 'kanban' && (
           <KanbanDesktop board={board.data} loading={board.isLoading} />
         )}
@@ -131,14 +161,56 @@ export function Desktops() {
         )}
         {desktop?.kind === 'member' && (
           <MemberDashboard
-            member={{ type: desktop.type, id: desktop.id, name: desktop.name, color: desktop.color }}
+            member={{
+              type: desktop.type,
+              id: desktop.id,
+              name: desktop.name,
+              color: desktop.color,
+            }}
             board={board.data}
           />
         )}
       </main>
 
       <ChampionBanner />
+
+      <LegalFooter />
     </div>
+  );
+}
+
+/**
+ * Tiny chrome strip with the legal links. Sits below ChampionBanner so it's
+ * the very last thing on the page. Hidden in ambient/TV modes so the kitchen
+ * wall stays uncluttered (those modes set `data-tv` / `data-ambient` on body
+ * and the rule lives in index.css).
+ */
+function LegalFooter() {
+  return (
+    <footer
+      data-chrome="legal"
+      className="border-t border-ink-900/10 bg-cream-100/60 px-4 py-2 text-center text-[11px] text-ink-500 sm:px-7"
+    >
+      <nav
+        aria-label="Legal"
+        className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1"
+      >
+        <Link to="/privacy" className="hover:text-ink-900 hover:underline">
+          Privacy
+        </Link>
+        <span aria-hidden="true">·</span>
+        <Link to="/terms" className="hover:text-ink-900 hover:underline">
+          Terms
+        </Link>
+        <span aria-hidden="true">·</span>
+        <a
+          href="mailto:support@choreboard.io"
+          className="hover:text-ink-900 hover:underline"
+        >
+          support
+        </a>
+      </nav>
+    </footer>
   );
 }
 
@@ -151,6 +223,7 @@ function TopBar({
   index,
   tagLabel,
   tagTitle,
+  onTv,
 }: {
   familyName?: string;
   payoutAt: string | null;
@@ -160,9 +233,11 @@ function TopBar({
   index: number;
   tagLabel: string;
   tagTitle: string;
+  onTv: () => void;
 }) {
-  // Tick the countdown so the "pays out in 2h" pill ages without a full
-  // refetch.
+  const navigate = useNavigate();
+  const sseStatus = useSseStatus();
+  // Tick the countdown so the "pays out in 2h" pill ages without a full refetch.
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((n) => n + 1), 30_000);
@@ -170,37 +245,167 @@ function TopBar({
   }, []);
 
   return (
-    <header className="flex items-start justify-between border-b-2 border-ink-900 px-5 py-3 sm:px-7 sm:py-4">
-      <div className="flex flex-col gap-1">
-        <Wordmark size="md" />
-        {familyName && (
-          <span className="ml-9 text-xs font-semibold uppercase tracking-wide text-ink-500">
-            {familyName}
+    <header
+      data-chrome="topbar"
+      className="safe-pt sticky top-0 z-30 border-b-2 border-ink-900 bg-cream-100/85 px-4 py-3 backdrop-blur-md sm:px-7 sm:py-4"
+    >
+      <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Wordmark size="md" />
+          {familyName && (
+            <span className="hidden truncate text-xs font-semibold uppercase tracking-wide text-ink-500 sm:block">
+              · {familyName}
+            </span>
+          )}
+          {/* Tiny live-status dot. Visible on every page so a parent can tell
+              at a glance whether real-time updates are flowing or if the
+              network's dropped. Only the dot shows on phone; the label
+              appears from sm: up. */}
+          <span
+            title={
+              sseStatus === 'open'
+                ? 'Real-time updates active'
+                : sseStatus === 'connecting'
+                  ? 'Reconnecting…'
+                  : 'Real-time updates offline'
+            }
+            className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider sm:px-2 ${
+              sseStatus === 'open'
+                ? 'text-money'
+                : sseStatus === 'connecting'
+                  ? 'text-accent-orange'
+                  : 'text-accent-red'
+            }`}
+            aria-live="polite"
+          >
+            <span
+              aria-hidden
+              className={`inline-block h-1.5 w-1.5 rounded-full ${
+                sseStatus === 'open'
+                  ? 'bg-money'
+                  : sseStatus === 'connecting'
+                    ? 'bg-accent-orange'
+                    : 'bg-accent-red'
+              } ${sseStatus === 'open' ? 'animate-pulse' : ''}`}
+            />
+            <span className="hidden sm:inline">
+              {sseStatus === 'open' ? 'Live' : sseStatus === 'connecting' ? 'Sync' : 'Offline'}
+            </span>
           </span>
-        )}
-      </div>
-      <div className="flex items-start gap-4">
-        {pendingApprovalCount > 0 && (
-          <span className="pill-pending">
-            {pendingApprovalCount} pending approval
-            {pendingApprovalCount === 1 ? '' : 's'}
-          </span>
-        )}
-        {payoutAt && (
-          <span className="pill hidden sm:inline-flex">
-            Pays out {formatPayoutShort(payoutAt)}
-          </span>
-        )}
-        {showAdmin && (
-          <Link to="/admin" className="btn-ghost">
-            Admin
-          </Link>
-        )}
-        <button className="btn-ghost" onClick={onLogout}>
-          Sign out
-        </button>
-        <div className="ml-2">
-          <PageTag index={index} label={tagLabel} title={tagTitle} />
+        </div>
+
+        <div className="flex items-center gap-2 sm:gap-3">
+          {pendingApprovalCount > 0 && (
+            <span className="pill-pending whitespace-nowrap">
+              {pendingApprovalCount}
+              <span className="hidden sm:inline">
+                {' '}pending approval{pendingApprovalCount === 1 ? '' : 's'}
+              </span>
+            </span>
+          )}
+          {payoutAt && (
+            <span className="pill hidden whitespace-nowrap md:inline-flex">
+              Pays out {formatPayoutShort(payoutAt)}
+            </span>
+          )}
+
+          {/* Desktop: explicit buttons. Mobile: overflow menu. */}
+          <div className="hidden items-center gap-2 sm:flex">
+            <button
+              type="button"
+              onClick={onTv}
+              className="btn-secondary"
+              title="Open the kitchen-wall TV view"
+              aria-label="Open TV mode"
+            >
+              <span aria-hidden>📺</span>
+              <span>TV</span>
+            </button>
+            {showAdmin && (
+              <Link to="/admin" className="btn-ghost">
+                Admin
+              </Link>
+            )}
+            <button className="btn-ghost" onClick={onLogout}>
+              Sign out
+            </button>
+          </div>
+
+          <div className="sm:hidden">
+            <Menu
+              align="end"
+              width={220}
+              trigger={(open, setOpen) => (
+                <button
+                  type="button"
+                  aria-label="Menu"
+                  onClick={() => setOpen(!open)}
+                  className="btn-icon ring-2 ring-ink-900 bg-paper shadow-paper-sm"
+                >
+                  <span className="text-lg leading-none">≡</span>
+                </button>
+              )}
+            >
+              {(close) => (
+                <div>
+                  {familyName && <MenuLabel>{familyName}</MenuLabel>}
+                  {payoutAt && (
+                    <div className="px-3 pb-1 text-xs text-ink-500">
+                      Pays out {formatPayoutShort(payoutAt)}
+                    </div>
+                  )}
+                  <MenuDivider />
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      onTv();
+                    }}
+                  >
+                    📺 TV mode · Kitchen wall
+                  </MenuItem>
+                  {showAdmin && (
+                    <MenuItem
+                      onClick={() => {
+                        close();
+                        navigate('/admin');
+                      }}
+                    >
+                      Admin · Family controls
+                    </MenuItem>
+                  )}
+                  <MenuDivider />
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      navigate('/privacy');
+                    }}
+                  >
+                    Privacy policy
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      close();
+                      navigate('/terms');
+                    }}
+                  >
+                    Terms of service
+                  </MenuItem>
+                  <MenuDivider />
+                  <MenuItem
+                    destructive
+                    onClick={() => {
+                      close();
+                      onLogout();
+                    }}
+                  >
+                    Sign out
+                  </MenuItem>
+                </div>
+              )}
+            </Menu>
+          </div>
+
+          <PageTag index={index} label={tagLabel} title={tagTitle} className="ml-1" />
         </div>
       </div>
     </header>
@@ -228,37 +433,44 @@ function DotIndicator({
   onPick: (n: number) => void;
 }) {
   return (
-    <nav className="flex items-center justify-center gap-2 border-b-2 border-ink-900/15 px-4 py-2.5">
-      {desktops.map((d, i) => {
-        const active = i === idx;
-        const color =
-          d.kind === 'member' ? d.color ?? undefined : undefined;
-        const label = labelFor(d);
-        return (
-          <button
-            key={i}
-            onClick={() => onPick(i)}
-            className="group relative flex items-center"
-            aria-label={label}
-          >
-            <span
-              className={`h-2.5 rounded-full transition-all ${
-                active ? 'w-7' : 'w-2.5'
-              }`}
-              style={{
-                backgroundColor: active ? color ?? '#10182B' : 'rgba(16,24,43,0.25)',
-              }}
-            />
-            <span
-              className={`pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-ink-700 transition-opacity ${
-                active ? 'opacity-90' : 'opacity-0 group-hover:opacity-60'
-              }`}
+    <nav
+      data-chrome="dots"
+      className="sticky z-20 flex items-center justify-center gap-2 border-b-2 border-ink-900/15 bg-cream-100/85 px-4 py-2.5 backdrop-blur-md sm:py-3"
+      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 60px)' }}
+      aria-label="Desktops"
+    >
+      <div className="flex max-w-full items-center gap-2 overflow-x-auto px-2 py-1">
+        {desktops.map((d, i) => {
+          const active = i === idx;
+          const color = d.kind === 'member' ? d.color ?? undefined : undefined;
+          const label = labelFor(d);
+          return (
+            <button
+              key={i}
+              onClick={() => onPick(i)}
+              className="group relative flex items-center px-1 py-1.5 tap-target"
+              aria-label={label}
+              aria-current={active ? 'page' : undefined}
             >
-              {label}
-            </span>
-          </button>
-        );
-      })}
+              <span
+                className={`rounded-full transition-all ${
+                  active ? 'h-3 w-8 sm:h-3.5 sm:w-10' : 'h-3 w-3'
+                }`}
+                style={{
+                  backgroundColor: active ? color ?? '#10182B' : 'rgba(16,24,43,0.25)',
+                }}
+              />
+              <span
+                className={`pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold uppercase tracking-wider text-ink-700 transition-opacity sm:top-8 ${
+                  active ? 'opacity-90' : 'opacity-0 group-hover:opacity-60'
+                }`}
+              >
+                {label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }

@@ -5,6 +5,10 @@ import { money, timeUntil } from '../lib/format';
 import { useSession } from '../lib/session';
 import type { BoardResponse, Goal, Kid, MemberStats } from '../lib/types';
 import { DesktopTitle, MemberAvatar, ProgressBar } from '../ui/primitives';
+import { AnimatedNumber } from '../ui/AnimatedNumber';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonDesktop } from '../ui/Skeleton';
+import { toastError, toastSuccess } from '../ui/Toast';
 
 type KidBudget = {
   kid: Kid;
@@ -54,7 +58,7 @@ export function BudgetDesktop({
   }, [board?.instances]);
 
   if (!board) {
-    return <div className="grid h-full place-items-center text-ink-500">Loading…</div>;
+    return <SkeletonDesktop />;
   }
 
   const totalToyProgress = budgets.reduce(
@@ -64,32 +68,36 @@ export function BudgetDesktop({
   const totalOwed = budgets.reduce((sum, b) => sum + (b.stats?.unpaidCents ?? 0), 0);
 
   return (
-    <div className="h-full overflow-y-auto p-6 sm:p-8">
-      <div className="mx-auto flex max-w-6xl flex-col gap-5">
+    <div className="h-full overflow-y-auto p-4 sm:p-7 2xl:p-10">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 sm:gap-6 2xl:gap-8">
         <DesktopTitle
           date="POCKET MONEY PLANNER"
           title="Budget goals"
           subtitle="Turn this week's chores into toy-money plans kids can actually see."
         />
 
-        <section className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
-          <div className="card flex flex-col gap-4 p-6 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="page-tag">Toy-goal progress</div>
-              <div className="font-display text-6xl font-extrabold tracking-tight text-money sm:text-7xl">
-                {money(totalToyProgress)}
-              </div>
-              <p className="mt-2 max-w-xl text-sm text-ink-600">
+        <section className="grid gap-4 lg:grid-cols-[1.5fr_1fr] 2xl:gap-6">
+          <div className="card flex flex-col gap-4 p-5 sm:flex-row sm:items-end sm:justify-between sm:p-7 2xl:p-10">
+            <div className="min-w-0">
+              <div className="page-tag mb-1.5">Toy-goal progress</div>
+              <AnimatedNumber
+                value={totalToyProgress}
+                format={money}
+                className="block font-display text-fluid-money font-extrabold tabular-nums tracking-tight text-money"
+              />
+              <p className="mt-3 max-w-xl text-sm text-ink-700 sm:text-base">
                 Budgeting here is intentionally simple: pick the toy, see what is
                 owed, and decide how much of payday gets protected for the goal.
               </p>
             </div>
-            <div className="grid gap-2 text-sm sm:text-right">
-              <span className="pill-dark justify-center">
+            <div className="flex flex-wrap gap-2 text-sm sm:flex-col sm:items-end">
+              <span className="pill-dark whitespace-nowrap">
                 Owed now {money(totalOwed)}
               </span>
               {payoutAt && (
-                <span className="pill justify-center">Payday in {timeUntil(payoutAt)}</span>
+                <span className="pill whitespace-nowrap">
+                  Payday in {timeUntil(payoutAt)}
+                </span>
               )}
             </div>
           </div>
@@ -98,8 +106,12 @@ export function BudgetDesktop({
         </section>
 
         {budgets.length === 0 ? (
-          <section className="card p-6 text-sm text-ink-500">
-            Add a kid in Family settings to start planning pocket money goals.
+          <section className="card p-6">
+            <EmptyState
+              illustration="kids"
+              title="No kids yet"
+              body="Add a kid in Family settings to start planning pocket money goals."
+            />
           </section>
         ) : (
           <section className="grid gap-4 lg:grid-cols-2">
@@ -165,18 +177,20 @@ function KidBudgetCard({
     goal && saveCents > 0 ? Math.max(1, Math.ceil(shortfallCents / saveCents)) : null;
 
   return (
-    <article className="card flex flex-col gap-4 p-5">
+    <article className="card flex flex-col gap-4 p-5 sm:p-6 2xl:p-7">
       <header className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <MemberAvatar name={budget.kid.name} color={budget.kid.color} size="lg" />
-          <div>
-            <h2 className="font-display text-2xl font-extrabold">{budget.kid.name}</h2>
+          <div className="min-w-0">
+            <h2 className="truncate font-display text-2xl font-extrabold sm:text-3xl">
+              {budget.kid.name}
+            </h2>
             <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
               {loading ? 'checking pocket money...' : `${money(owedCents)} owed now`}
             </p>
           </div>
         </div>
-        <span className="pill">70 / 20 / 10</span>
+        <span className="pill whitespace-nowrap">70 / 20 / 10</span>
       </header>
 
       {goal ? (
@@ -256,7 +270,11 @@ function BudgetGoalForm({ kid, onDone }: { kid: Kid; onDone: () => void }) {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['goals'] });
+      toastSuccess('Goal added', name.trim());
       onDone();
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t save goal', err.message);
     },
   });
 

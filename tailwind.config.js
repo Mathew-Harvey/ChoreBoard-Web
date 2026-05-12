@@ -2,6 +2,18 @@
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
+    // Extra-large breakpoints so the layout has room to breathe on the
+    // kitchen-wall touchscreen and a 27" desktop monitor. Tailwind's `2xl`
+    // default is 1536px; we add a 1920 and 2400 break so cards/text scale up.
+    screens: {
+      sm: '640px',
+      md: '768px',
+      lg: '1024px',
+      xl: '1280px',
+      '2xl': '1536px',
+      '3xl': '1920px',
+      '4xl': '2400px',
+    },
     extend: {
       colors: {
         // Warm paper palette pulled from the style guide.
@@ -42,10 +54,26 @@ export default {
         // offset shadow underneath so cards feel like they're sitting on paper.
         paper: '4px 4px 0 0 rgba(16,24,43,0.9)',
         'paper-sm': '2px 2px 0 0 rgba(16,24,43,0.9)',
+        'paper-lg': '8px 8px 0 0 rgba(16,24,43,0.9)',
+        'paper-xl': '12px 12px 0 0 rgba(16,24,43,0.9)',
         soft: '0 1px 0 rgba(16,24,43,0.06), 0 2px 6px rgba(16,24,43,0.08)',
+        // Inner top highlight used on raised pill buttons.
+        'inset-hi': 'inset 0 1px 0 rgba(255,255,255,0.12)',
       },
       borderRadius: {
         chunky: '22px',
+        'chunky-lg': '28px',
+      },
+      fontSize: {
+        // Fluid headline scales so the family TV shows giant numbers and a
+        // phone shows readable ones — without dozens of breakpoints.
+        'fluid-hero': ['clamp(2.5rem, 7.5vw, 7.5rem)', { lineHeight: '0.95', letterSpacing: '-0.03em' }],
+        'fluid-money': ['clamp(3rem, 8.5vw, 9rem)', { lineHeight: '0.9', letterSpacing: '-0.025em' }],
+        'fluid-title': ['clamp(1.5rem, 2.6vw, 2.75rem)', { lineHeight: '1', letterSpacing: '-0.02em' }],
+        'fluid-section': ['clamp(1.125rem, 1.4vw, 1.5rem)', { lineHeight: '1.1', letterSpacing: '-0.01em' }],
+        // Ambient TV: huge, room-readable.
+        'fluid-ambient': ['clamp(4.5rem, 16vw, 20rem)', { lineHeight: '0.85', letterSpacing: '-0.04em' }],
+        'fluid-ambient-sm': ['clamp(2rem, 4vw, 4.5rem)', { lineHeight: '1', letterSpacing: '-0.02em' }],
       },
       keyframes: {
         pulseRed: {
@@ -67,12 +95,23 @@ export default {
           '0%, 100%': { transform: 'translateY(0) rotate(-6deg)' },
           '50%': { transform: 'translateY(-3px) rotate(6deg)' },
         },
+        pop: {
+          '0%': { transform: 'scale(0.92)', opacity: '0' },
+          '60%': { transform: 'scale(1.04)', opacity: '1' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
       },
       animation: {
         pulseRed: 'pulseRed 1.4s ease-out infinite',
         floatIn: 'floatIn 220ms ease-out',
         confettiFall: 'confettiFall 2.4s ease-in forwards',
         crownBob: 'crownBob 2.6s ease-in-out infinite',
+        pop: 'pop 280ms cubic-bezier(.18,.89,.32,1.28)',
+        shimmer: 'shimmer 1.6s linear infinite',
       },
       fontFamily: {
         sans: ['"Inter Tight"', 'Inter', 'system-ui', 'sans-serif'],

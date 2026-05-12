@@ -33,6 +33,26 @@ import {
   buildMemberLookup,
 } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonChoreCard, SkeletonDesktop } from '../ui/Skeleton';
+import { toastError, toastMoney, toastSuccess } from '../ui/Toast';
+import { AnimatedNumber } from '../ui/AnimatedNumber';
+import { StreakChip } from '../ui/StreakChip';
+import { celebrate } from '../lib/celebrate';
+import { useFamilyMemberStats, rollupByKey } from '../lib/useFamilyMemberStats';
+
+/** Subtle vibrate on touch devices that support it. */
+function tinyHaptic() {
+  try {
+    navigator.vibrate?.(8);
+  } catch {
+    /* unsupported */
+  }
+}
+
+// Reference so unused-import lint stays happy (Skeleton is exported for
+// future uses; SkeletonDesktop is what we render in the loading branch).
+void SkeletonChoreCard;
 
 type RosterMember = { type: 'user' | 'kid'; id: string; name: string; color?: string };
 type SetStatusFn = (instanceId: string, payload: SetStatusPayload) => void;
@@ -63,6 +83,8 @@ export function KanbanDesktop({
     queryKey: ['leaderboard'],
     queryFn: () => api.get<LeaderboardResponse>('/api/stats/leaderboard'),
   });
+  const memberStatsQ = useFamilyMemberStats(board);
+  const memberStatsLookup = rollupByKey(memberStatsQ.data);
   const [dragging, setDragging] = useState<BoardInstance | null>(null);
 
   const sensors = useSensors(
@@ -74,9 +96,26 @@ export function KanbanDesktop({
     mutationFn: async (input: { instanceId: string; action: string; body?: any }) => {
       return api.post(`/api/board/instances/${input.instanceId}/${input.action}`, input.body);
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['board'] });
       qc.invalidateQueries({ queryKey: ['leaderboard'] });
+      // Quick human-friendly feedback on the verb that just succeeded. The
+      // SSE channel still drives the authoritative state — these are vibes.
+      const inst = board?.instances?.find?.((i) => i.id === vars.instanceId);
+      if (vars.action === 'claim') {
+        toastSuccess('Claimed', inst ? `${inst.choreName} is yours.` : undefined);
+      } else if (vars.action === 'unclaim') {
+        toastSuccess('Returned to Available');
+      } else if (vars.action === 'submit') {
+        toastSuccess('Submitted', 'Waiting on a parent to approve.');
+      } else if (vars.action === 'approve' && inst) {
+        toastMoney(`Approved · ${money(inst.amountCents)}`, inst.choreName);
+      } else if (vars.action === 'reject') {
+        toastSuccess('Sent back', 'The card is back with the claimant.');
+      }
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t do that', humanizeError(err.message));
     },
   });
 
@@ -90,21 +129,41 @@ export function KanbanDesktop({
 
   const spawn = useMutation({
     mutationFn: (choreId: string) => api.post(`/api/chores/${choreId}/spawn`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['board'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['board'] });
+      toastSuccess('Added to the board');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t add', err.message);
+    },
   });
 
   const setStatus = useMutation({
     mutationFn: (input: { instanceId: string; payload: SetStatusPayload }) =>
       api.post(`/api/board/instances/${input.instanceId}/set-status`, input.payload),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['board'] });
       qc.invalidateQueries({ queryKey: ['leaderboard'] });
       qc.invalidateQueries({ queryKey: ['member'] });
+      const verb =
+        vars.payload.status === 'approved'
+          ? 'Approved'
+          : vars.payload.status === 'claimed'
+            ? 'Assigned'
+            : vars.payload.status === 'available'
+              ? 'Returned to Available'
+              : vars.payload.status === 'pending'
+                ? 'Sent to pending'
+                : 'Marked missed';
+      toastSuccess(verb);
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t update', err.message);
     },
   });
 
   if (loading || !board) {
-    return <div className="grid h-full place-items-center text-ink-500">Loading…</div>;
+    return <SkeletonDesktop />;
   }
 
   const principal = session.data;
@@ -126,6 +185,20 @@ export function KanbanDesktop({
   const onSetStatus: SetStatusFn = (instanceId, payload) =>
     setStatus.mutate({ instanceId, payload });
   const onSpawn: SpawnFn = (choreId) => spawn.mutate(choreId);
+
+  // Parent-only convenience: approve everything pending in one go.
+  const approveAll = () => {
+    const pending = board.instances.filter((i) => i.status === 'pending');
+    if (pending.length === 0) return;
+    if (
+      pending.length > 1 &&
+      !confirm(`Approve all ${pending.length} pending chores?`)
+    )
+      return;
+    for (const inst of pending) {
+      action.mutate({ instanceId: inst.id, action: 'approve' });
+    }
+  };
   const activeChores = (choreCatalog.data ?? [])
     .filter((c) => c.active)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -158,10 +231,13 @@ export function KanbanDesktop({
   const onDragStart = (e: DragStartEvent) => {
     const inst = board.instances.find((i) => i.id === e.active.id);
     setDragging(inst ?? null);
+    document.body.dataset.dragging = '1';
+    tinyHaptic();
   };
 
   const onDragEnd = (e: DragEndEvent) => {
     setDragging(null);
+    delete document.body.dataset.dragging;
     if (!e.over) return;
     const inst = board.instances.find((i) => i.id === e.active.id);
     if (!inst) return;
@@ -213,50 +289,60 @@ export function KanbanDesktop({
 
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      <div className="flex h-full flex-col gap-4 overflow-y-auto p-5 sm:p-7">
-        <DesktopTitle
-          date={todayLabel.toUpperCase()}
-          title="The board"
-          subtitle={
-            nextRenewal
-              ? `Next renewal in ${timeUntil(nextRenewal)} · Pays out ${leaderboard.data?.payoutAt ? new Date(leaderboard.data.payoutAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric' }) : ''}`
-              : undefined
-          }
-          right={
-            lb.length > 0 ? (
-              <MiniLeaderboard entries={lb} maxAmount={maxLb} />
-            ) : null
-          }
-        />
-
-        {/* Row 1 — Available + member lanes */}
-        <div className="flex gap-3 overflow-x-auto pb-1 sm:gap-4">
-          <AvailableColumn
-            instances={board.instances}
-            isParent={isParent}
-            me={me}
-            roster={roster}
-            onSetStatus={onSetStatus}
-            onSpawn={isParent ? onSpawn : undefined}
-            activeChores={isParent ? activeChores : []}
+      <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:gap-5 sm:p-7 2xl:p-10">
+        <div className="mx-auto w-full max-w-[1800px]">
+          <DesktopTitle
+            date={todayLabel.toUpperCase()}
+            title="The board"
+            subtitle={
+              nextRenewal
+                ? `Next renewal in ${timeUntil(nextRenewal)}${leaderboard.data?.payoutAt ? ` · Pays out ${new Date(leaderboard.data.payoutAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric' })}` : ''}`
+                : undefined
+            }
+            right={
+              lb.length > 0 ? (
+                <MiniLeaderboard
+                  entries={lb}
+                  maxAmount={maxLb}
+                  memberLookup={memberStatsLookup}
+                />
+              ) : null
+            }
           />
-          {memberColumns.map((c) => (
-            <MemberColumn
-              key={`m-${c.kind === 'member' ? c.memberId : ''}`}
-              column={c}
+        </div>
+
+        {/* Row 1 — Available + member lanes. Scroll-snap so flicking a finger
+            lands on a column edge rather than mid-card. */}
+        <div className="mx-auto w-full max-w-[1800px]">
+          <div className="h-scroll-snap -mx-1 flex gap-3 overflow-x-auto px-1 pt-1 pb-3 sm:gap-4 2xl:gap-6">
+            <AvailableColumn
               instances={board.instances}
               isParent={isParent}
               me={me}
-              lookup={lookup}
               roster={roster}
               onSetStatus={onSetStatus}
-              onSubmit={(id) => action.mutate({ instanceId: id, action: 'submit' })}
+              onSpawn={isParent ? onSpawn : undefined}
+              activeChores={isParent ? activeChores : []}
             />
-          ))}
+            {memberColumns.map((c) => (
+              <MemberColumn
+                key={`m-${c.kind === 'member' ? c.memberId : ''}`}
+                column={c}
+                instances={board.instances}
+                isParent={isParent}
+                me={me}
+                lookup={lookup}
+                roster={roster}
+                onSetStatus={onSetStatus}
+                onSubmit={(id) => action.mutate({ instanceId: id, action: 'submit' })}
+                memberLookup={memberStatsLookup}
+              />
+            ))}
+          </div>
         </div>
 
         {/* Row 2 — Pending + Completed */}
-        <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+        <div className="mx-auto grid w-full max-w-[1800px] gap-3 sm:grid-cols-2 sm:gap-4 2xl:gap-6">
           <PendingColumn
             instances={board.instances}
             isParent={isParent}
@@ -266,6 +352,7 @@ export function KanbanDesktop({
             onApprove={(id) => action.mutate({ instanceId: id, action: 'approve' })}
             onReject={(id) => action.mutate({ instanceId: id, action: 'reject' })}
             onSetStatus={onSetStatus}
+            onApproveAll={approveAll}
           />
           <CompletedColumn
             instances={board.instances}
@@ -277,17 +364,15 @@ export function KanbanDesktop({
         </div>
       </div>
 
-      <DragOverlay>
+      <DragOverlay dropAnimation={null}>
         {dragging && (
-          <CardShell instance={dragging} draggable={false} accentColor={undefined} overlay />
+          <div className="rotate-2 scale-[1.04] drop-shadow-[8px_8px_0_rgba(16,24,43,0.55)]">
+            <CardShell instance={dragging} draggable={false} accentColor={undefined} overlay />
+          </div>
         )}
       </DragOverlay>
 
-      {action.error instanceof ApiError && (
-        <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-xl bg-accent-red px-4 py-2 text-sm font-semibold text-white shadow-paper ring-2 ring-ink-900">
-          {humanizeError(action.error.message)}
-        </div>
-      )}
+      {/* Errors flow through the global Toast viewport — see action.onError. */}
     </DndContext>
   );
 }
@@ -327,9 +412,11 @@ function humanizeError(code: string): string {
 function MiniLeaderboard({
   entries,
   maxAmount,
+  memberLookup,
 }: {
   entries: NonNullable<LeaderboardResponse['entries']>;
   maxAmount: number;
+  memberLookup: ReturnType<typeof rollupByKey>;
 }) {
   return (
     <div className="card-dark hidden w-72 px-4 py-3 sm:block">
@@ -340,23 +427,43 @@ function MiniLeaderboard({
         </span>
       </div>
       <ol className="flex flex-col gap-1.5">
-        {entries.map((e, i) => (
-          <li key={`${e.memberType}:${e.memberId}`} className="flex items-center gap-2 text-sm">
-            <span className="w-3 text-right text-xs text-cream-50/60">{i + 1}</span>
-            <MemberAvatar name={e.name} color={e.color} size="xs" />
-            <span className="flex-1 truncate">{e.name}</span>
-            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-cream-50/15">
-              <div
-                className="h-full"
-                style={{
-                  width: `${(e.amountCents / maxAmount) * 100}%`,
-                  backgroundColor: e.color ?? '#FBF6E6',
-                }}
+        {entries.map((e, i) => {
+          const rollup = memberLookup.get(e.memberType, e.memberId);
+          return (
+            <li
+              key={`${e.memberType}:${e.memberId}`}
+              className="flex items-center gap-2 text-sm"
+            >
+              <span className="w-3 text-right text-xs text-cream-50/60">{i + 1}</span>
+              <MemberAvatar name={e.name} color={e.color} size="xs" />
+              <span className="flex flex-1 items-center gap-1.5 truncate">
+                <span className="truncate">{e.name}</span>
+                {rollup && (
+                  <StreakChip
+                    streak={rollup.stats.streak}
+                    bestStreak={rollup.stats.bestStreak}
+                    size="xs"
+                    tone="dark"
+                  />
+                )}
+              </span>
+              <div className="h-1.5 w-12 overflow-hidden rounded-full bg-cream-50/15">
+                <div
+                  className="h-full"
+                  style={{
+                    width: `${(e.amountCents / maxAmount) * 100}%`,
+                    backgroundColor: e.color ?? '#FBF6E6',
+                  }}
+                />
+              </div>
+              <AnimatedNumber
+                value={e.amountCents}
+                format={money}
+                className="font-display tabular-nums"
               />
-            </div>
-            <span className="font-display tabular-nums">{money(e.amountCents)}</span>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -394,25 +501,30 @@ function AvailableColumn({
   return (
     <section
       ref={setNodeRef}
-      className={`flex w-72 flex-shrink-0 flex-col gap-2 rounded-chunky bg-ink-900 p-3 text-cream-50 ring-2 ring-ink-900 shadow-paper sm:w-80 ${
-        isOver ? 'outline outline-2 outline-offset-2 outline-accent-blue' : ''
+      data-droppable="1"
+      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky bg-ink-900 p-3 text-cream-50 ring-2 ring-ink-900 shadow-paper sm:w-[20rem] xl:w-[22rem] 2xl:w-[24rem] ${
+        isOver ? 'outline outline-2 outline-offset-2 outline-accent-yellow' : ''
       }`}
     >
-      <header className="flex items-center justify-between px-1">
-        <h2 className="font-display text-base font-bold">
+      <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-chunky bg-ink-900 px-2 py-2">
+        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
           Available · <span className="text-cream-50/60">{items.length}</span>
         </h2>
-        {onSpawn && (
-          <SpawnPicker chores={activeChores} onSpawn={onSpawn} />
-        )}
+        {onSpawn && <SpawnPicker chores={activeChores} onSpawn={onSpawn} />}
       </header>
       <div className="flex flex-col gap-2">
         {items.length === 0 && (
-          <p className="rounded-xl bg-cream-50/5 px-3 py-6 text-center text-xs text-cream-50/60">
-            {isParent
-              ? 'Nothing to claim right now. Use + Add to drop one onto the board.'
-              : 'Nothing to claim right now.'}
-          </p>
+          <EmptyState
+            illustration="available"
+            tone="dark"
+            compact
+            title="All clear"
+            body={
+              isParent
+                ? 'Nothing to claim right now. Use + Add to drop one onto the board.'
+                : 'Nothing to claim right now — check back soon.'
+            }
+          />
         )}
         {items.map((inst) => (
           <DraggableCard
@@ -439,13 +551,17 @@ function SpawnPicker({ chores, onSpawn }: { chores: Chore[]; onSpawn: SpawnFn })
   return (
     <Menu
       align="end"
-      width={280}
+      width={300}
       trigger={(open, setOpen) => (
         <button
           onClick={() => setOpen(!open)}
-          className="rounded-lg bg-cream-50/15 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-cream-50 ring-1 ring-cream-50/25 hover:bg-cream-50/25"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="inline-flex items-center gap-1 rounded-lg bg-cream-50/15 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-cream-50 ring-1 ring-cream-50/25 transition hover:bg-cream-50/25 active:translate-y-px"
+          style={{ minHeight: 32 }}
         >
-          + Add
+          <span>+</span>
+          <span>Add</span>
         </button>
       )}
     >
@@ -496,6 +612,7 @@ function MemberColumn({
   roster,
   onSetStatus,
   onSubmit,
+  memberLookup,
 }: {
   column: Extract<Column, { kind: 'member' }>;
   instances: BoardInstance[];
@@ -505,7 +622,9 @@ function MemberColumn({
   roster: RosterMember[];
   onSetStatus: SetStatusFn;
   onSubmit: (id: string) => void;
+  memberLookup: ReturnType<typeof rollupByKey>;
 }) {
+  const rollup = memberLookup.get(column.memberType, column.memberId);
   const items = useMemo(
     () =>
       instances
@@ -526,17 +645,34 @@ function MemberColumn({
   return (
     <section
       ref={setNodeRef}
-      className={`flex w-72 flex-shrink-0 flex-col gap-2 rounded-chunky p-3 ring-2 ring-ink-900 shadow-paper sm:w-80 transition ${
-        isOver ? 'outline outline-2 outline-offset-2 outline-ink-900' : ''
+      data-droppable="1"
+      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky p-3 ring-2 ring-ink-900 shadow-paper transition sm:w-[20rem] xl:w-[22rem] 2xl:w-[24rem] ${
+        isOver ? 'outline outline-2 outline-offset-2' : ''
       }`}
-      style={{ backgroundColor: hexAlpha(accent, 0.18) }}
+      style={{
+        backgroundColor: hexAlpha(accent, 0.18),
+        outlineColor: isOver ? accent : 'transparent',
+      }}
     >
-      <header className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-2">
+      <header className="flex items-center justify-between gap-2 px-1">
+        <div className="flex min-w-0 items-center gap-2">
           <MemberAvatar name={column.name} color={accent} size="sm" />
-          <h2 className="font-display text-base font-bold">{column.name}</h2>
+          <h2 className="truncate font-display text-base font-bold sm:text-lg 2xl:text-xl">
+            {column.name}
+          </h2>
+          {rollup && (
+            <StreakChip
+              streak={rollup.stats.streak}
+              bestStreak={rollup.stats.bestStreak}
+              size="xs"
+            />
+          )}
         </div>
-        <span className="money-amt text-sm">{money(total)}</span>
+        <AnimatedNumber
+          value={total}
+          format={money}
+          className="money-amt text-sm sm:text-base"
+        />
       </header>
       <div className="flex flex-col gap-2">
         {items.length === 0 ? (
@@ -569,13 +705,18 @@ function MemberColumn({
 function DropHint({ accent }: { accent: string }) {
   return (
     <div
-      className="grid place-items-center rounded-xl py-6 text-[11px] font-semibold uppercase tracking-wider text-ink-700"
+      className="grid place-items-center rounded-xl py-8 text-center text-[11px] font-bold uppercase tracking-wider text-ink-700 transition"
       style={{
         border: `2px dashed ${accent}`,
         backgroundColor: 'transparent',
       }}
     >
-      Drop a chore here
+      <div>
+        <div className="opacity-70">Drop a chore here</div>
+        <div className="mt-1 text-[10px] font-semibold normal-case opacity-60">
+          (or use the ⋯ menu)
+        </div>
+      </div>
     </div>
   );
 }
@@ -589,6 +730,7 @@ function PendingColumn({
   onApprove,
   onReject,
   onSetStatus,
+  onApproveAll,
 }: {
   instances: BoardInstance[];
   isParent: boolean;
@@ -598,6 +740,7 @@ function PendingColumn({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onSetStatus: SetStatusFn;
+  onApproveAll?: () => void;
 }) {
   const items = useMemo(
     () =>
@@ -610,20 +753,32 @@ function PendingColumn({
   return (
     <section
       ref={setNodeRef}
-      className={`card flex flex-col gap-2 p-4 ${
+      data-droppable="1"
+      className={`card flex flex-col gap-2 p-4 sm:p-5 ${
         isOver ? 'outline outline-2 outline-offset-2 outline-accent-orange' : ''
       }`}
     >
-      <header className="flex items-center justify-between">
-        <h2 className="font-display text-base font-bold">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
           Pending · <span className="text-ink-500">{items.length}</span>
         </h2>
+        <div className="flex items-center gap-2">
+          {items.length > 0 && <span className="pill-pending">{items.length} waiting</span>}
+          {isParent && items.length >= 2 && onApproveAll && (
+            <button type="button" className="btn-money" onClick={onApproveAll}>
+              Approve all
+            </button>
+          )}
+        </div>
       </header>
       <div className="flex flex-col gap-2">
         {items.length === 0 ? (
-          <p className="px-2 py-4 text-center text-xs text-ink-500">
-            Nothing waiting for approval.
-          </p>
+          <EmptyState
+            illustration="pending"
+            compact
+            title="Inbox zero"
+            body="Nothing waiting for approval right now."
+          />
         ) : (
           items.map((inst) => {
             const claimer =
@@ -672,17 +827,23 @@ function CompletedColumn({
     [instances],
   );
   return (
-    <section className="card flex flex-col gap-2 p-4">
+    <section className="card flex flex-col gap-2 p-4 sm:p-5">
       <header className="flex items-center justify-between">
-        <h2 className="font-display text-base font-bold">
+        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
           Completed today · <span className="text-ink-500">{items.length}</span>
         </h2>
+        {items.length > 0 && (
+          <span className="pill-approved">✓ {items.length}</span>
+        )}
       </header>
       <div className="flex flex-col gap-2">
         {items.length === 0 ? (
-          <p className="px-2 py-4 text-center text-xs text-ink-500">
-            Nothing finished yet today.
-          </p>
+          <EmptyState
+            illustration="completed"
+            compact
+            title="No chores filed yet today"
+            body="Approved chores show up here, ready for Sunday."
+          />
         ) : (
           items.map((inst) => {
             const claimer =
@@ -824,10 +985,10 @@ function CardShell({
   return (
     <article
       className={`relative flex select-none items-start gap-3 rounded-xl bg-paper p-3 ring-2 ring-ink-900 shadow-paper-sm transition ${
-        draggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-      } ${overlay ? 'rotate-1 scale-[1.02] shadow-paper' : ''} ${
-        overdue ? 'animate-pulseRed ring-accent-red' : ''
-      } ${tone === 'onDark' ? 'bg-cream-50' : ''}`}
+        overlay ? '' : 'animate-floatIn'
+      } ${draggable ? 'cursor-grab hover:-translate-y-0.5 hover:shadow-paper active:cursor-grabbing' : 'cursor-default'} ${
+        overlay ? 'rotate-1 scale-[1.02] shadow-paper' : ''
+      } ${overdue ? 'animate-pulseRed ring-accent-red' : ''} ${tone === 'onDark' ? 'bg-cream-50' : ''}`}
       style={
         accentColor
           ? {
@@ -884,6 +1045,13 @@ function CardShell({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
+                // Sparkle from the button to make the tap feel rewarding.
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                celebrate({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, {
+                  pieces: 24,
+                  spread: 140,
+                  durationMs: 1600,
+                });
                 onApprove?.(instance.id);
               }}
               className="btn-money flex-1 !py-1.5"
@@ -909,11 +1077,10 @@ function CardShell({
 
 function canSubmit(
   inst: BoardInstance,
-  isParent: boolean,
+  _isParent: boolean,
   me: { type: 'user' | 'kid'; id: string } | null,
 ): boolean {
   return (
-    !isParent &&
     !!me &&
     inst.status === 'claimed' &&
     inst.claimedByType === me.type &&
@@ -973,14 +1140,16 @@ function CardActionsMenu({
       trigger={(open, setOpen) => (
         <button
           aria-label="Card actions"
+          aria-haspopup="menu"
+          aria-expanded={open}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             setOpen(!open);
           }}
-          className="grid h-7 w-7 place-items-center rounded-lg text-ink-700 transition hover:bg-ink-900/10"
+          className="btn-icon text-ink-700"
         >
-          <span className="text-lg leading-none">⋯</span>
+          <span className="text-xl leading-none">⋯</span>
         </button>
       )}
     >

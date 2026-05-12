@@ -62,43 +62,58 @@ export function ChampionBanner() {
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-ink-900/40 backdrop-blur-sm animate-floatIn"
+      className="fixed inset-0 z-50 grid place-items-center bg-ink-900/40 p-4 backdrop-blur-sm animate-floatIn"
       onClick={() => setEvt(null)}
+      role="dialog"
+      aria-label="Champion of the week"
     >
       <Confetti />
-      <div className="card relative max-w-md p-8 text-center">
-        <div className="page-tag mb-2">CHAMPION OF THE WEEK</div>
+      <div className="card relative w-full max-w-md p-8 text-center sm:max-w-lg sm:p-10 lg:max-w-xl 2xl:max-w-2xl 2xl:p-14">
+        <div className="page-tag mb-3">CHAMPION OF THE WEEK</div>
         {champ ? (
           <>
             <div className="relative mx-auto inline-block">
-              <MemberAvatar name={champ.name} color={champ.color} size="xl" />
+              <div className="hidden 2xl:block">
+                <MemberAvatar name={champ.name} color={champ.color} size="3xl" />
+              </div>
+              <div className="hidden lg:block 2xl:hidden">
+                <MemberAvatar name={champ.name} color={champ.color} size="2xl" />
+              </div>
+              <div className="lg:hidden">
+                <MemberAvatar name={champ.name} color={champ.color} size="xl" />
+              </div>
               <span
                 aria-hidden
-                className="absolute -top-5 left-1/2 -translate-x-1/2 text-3xl animate-crownBob"
+                className="absolute -top-6 left-1/2 -translate-x-1/2 animate-crownBob text-4xl lg:-top-8 lg:text-5xl 2xl:-top-10 2xl:text-6xl"
               >
                 👑
               </span>
             </div>
-            <h2 className="mt-4 font-display text-4xl font-extrabold tracking-tight text-ink-900">
+            <h2 className="mt-5 font-display text-4xl font-extrabold tracking-tight text-ink-900 sm:text-5xl lg:text-6xl 2xl:text-7xl">
               {champ.name}
             </h2>
             {evt.championAmountCents !== null && (
-              <p className="mt-1 text-lg font-semibold text-money">
+              <p className="mt-2 text-lg font-extrabold text-money sm:text-xl lg:text-2xl 2xl:text-3xl">
                 {money(evt.championAmountCents)} this week
               </p>
             )}
           </>
         ) : (
           <>
-            <h2 className="font-display text-3xl font-extrabold tracking-tight text-ink-900">
+            <h2 className="font-display text-3xl font-extrabold tracking-tight text-ink-900 sm:text-4xl">
               Week closed!
             </h2>
-            <p className="mt-1 text-ink-500">No earnings this week — fresh start tomorrow.</p>
+            <p className="mt-2 text-ink-500">
+              No earnings this week — fresh start tomorrow.
+            </p>
           </>
         )}
-        <button className="btn-primary mt-6 w-full" onClick={() => setEvt(null)}>
+        <button className="btn-primary mt-6 w-full sm:mt-8" onClick={() => setEvt(null)}>
           Onwards
         </button>
+        <p className="mt-3 text-[11px] uppercase tracking-wider text-ink-400">
+          Tap anywhere to dismiss
+        </p>
       </div>
     </div>
   );

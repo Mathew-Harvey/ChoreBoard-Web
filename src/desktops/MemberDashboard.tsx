@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
 import type { BoardResponse, Goal, MemberStats } from '../lib/types';
@@ -10,6 +10,20 @@ import {
   PageTag,
   ProgressBar,
 } from '../ui/primitives';
+import { AnimatedNumber } from '../ui/AnimatedNumber';
+import { EmptyState } from '../ui/EmptyState';
+import { SkeletonDesktop } from '../ui/Skeleton';
+import { StreakChip } from '../ui/StreakChip';
+import { toastError, toastMoney, toastSuccess } from '../ui/Toast';
+import { celebrate } from '../lib/celebrate';
+
+function hexAlpha(hex: string | undefined, alpha: number): string {
+  if (!hex || !/^#[0-9a-fA-F]{6}$/.test(hex)) return `rgba(91,96,114,${alpha})`;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 type Member = { type: 'user' | 'kid'; id: string; name: string; color?: string };
 
@@ -38,10 +52,19 @@ export function MemberDashboard({
   const action = useMutation({
     mutationFn: async (input: { instanceId: string; action: 'approve' | 'reject' }) =>
       api.post(`/api/board/instances/${input.instanceId}/${input.action}`),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['board'] });
       qc.invalidateQueries({ queryKey: ['member', member.type, member.id] });
       qc.invalidateQueries({ queryKey: ['leaderboard'] });
+      const inst = board?.instances.find((i) => i.id === vars.instanceId);
+      if (vars.action === 'approve' && inst) {
+        toastMoney(`Approved · ${money(inst.amountCents)}`, inst.choreName);
+      } else if (vars.action === 'reject') {
+        toastSuccess('Sent back');
+      }
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t do that', err.message);
     },
   });
 
@@ -68,12 +91,12 @@ export function MemberDashboard({
   const accent = member.color ?? '#5B6072';
 
   if (statsQ.isLoading) {
-    return <div className="grid h-full place-items-center text-ink-500">Loading…</div>;
+    return <SkeletonDesktop />;
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 sm:p-8">
-      <div className="mx-auto flex max-w-6xl flex-col gap-5">
+    <div className="h-full overflow-y-auto p-4 sm:p-7 2xl:p-10">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 sm:gap-6 2xl:gap-8">
         <DesktopTitle
           title={member.name}
           subtitle={
@@ -81,39 +104,73 @@ export function MemberDashboard({
               ? `Level ${stats.level} · ${stats.xp.toLocaleString()} XP · 🔥 ${stats.streak}-day streak`
               : undefined
           }
-          right={
-            <div className="hidden sm:block">
-              <PageTag index={3} label="MEMBER" title={`Member dashboard · ${member.name}`} />
-            </div>
-          }
+          right={<PageTag index={3} label="MEMBER" title={`Member dashboard · ${member.name}`} />}
         />
 
-        {/* Top hero: avatar + this week + badge case */}
-        <section className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-          <div className="card flex items-center gap-5 p-5">
-            <MemberAvatar name={member.name} color={accent} size="xl" />
-            <div className="flex-1 text-right sm:text-left">
-              <div className="page-tag">THIS WEEK</div>
-              <div
-                className="font-display text-5xl font-extrabold tracking-tight sm:text-6xl"
-                style={{ color: '#0F6E37' }}
-              >
-                {money(stats?.weekCents ?? 0)}
+        {/* Top hero — "trophy room" style. Cover gradient in the member's
+            colour, avatar floats on top, and a row of inline stat chips
+            (streak / level / lifetime) sits alongside the weekly headline. */}
+        <section className="grid gap-4 lg:grid-cols-[1.6fr_1fr] 2xl:gap-6">
+          <div
+            className="card relative overflow-hidden p-5 sm:p-7 2xl:p-10"
+            style={{
+              backgroundImage: `linear-gradient(135deg, ${hexAlpha(accent, 0.22)} 0%, transparent 60%)`,
+            }}
+          >
+            {/* Decorative blob */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full opacity-20 blur-3xl"
+              style={{ backgroundColor: accent }}
+            />
+            <div className="relative flex flex-col items-center gap-5 text-center sm:flex-row sm:items-center sm:gap-6 sm:text-left">
+              <MemberAvatar name={member.name} color={accent} size="2xl" />
+              <div className="min-w-0 flex-1">
+                <div className="page-tag mb-1">THIS WEEK</div>
+                <AnimatedNumber
+                  value={stats?.weekCents ?? 0}
+                  format={money}
+                  className="block font-display text-fluid-money font-extrabold tabular-nums tracking-tight text-money"
+                />
+                {stats && (
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                    <StreakChip
+                      streak={stats.streak}
+                      bestStreak={stats.bestStreak}
+                      size="md"
+                    />
+                    <span
+                      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 sm:text-sm"
+                      style={{
+                        backgroundColor: hexAlpha(accent, 0.12),
+                        color: accent,
+                        borderColor: hexAlpha(accent, 0.3),
+                      }}
+                    >
+                      ⚡ Level {stats.level}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-ink-900/8 px-3 py-1 text-xs font-bold uppercase tracking-wider text-ink-700 ring-1 ring-ink-900/15 sm:text-sm">
+                      🏅 {stats.badgeCount} badges
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
 
-          <div className="card p-5">
+          <div className="card p-5 sm:p-6 2xl:p-7">
             <header className="mb-3 flex items-baseline justify-between">
-              <h2 className="font-display text-lg font-extrabold">Badge case</h2>
+              <h2 className="font-display text-lg font-extrabold sm:text-xl 2xl:text-2xl">
+                Badge case
+              </h2>
               <span className="text-xs text-ink-500">{badges.length} earned</span>
             </header>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-5 gap-2 sm:grid-cols-5 lg:grid-cols-5 2xl:grid-cols-10">
               {badges.slice(0, 10).map((b) => (
                 <div
                   key={b.code}
                   title={`${b.name} · ${b.description}`}
-                  className="grid h-12 w-12 place-items-center rounded-full bg-accent-yellow/20 text-xl ring-2 ring-ink-900"
+                  className="aspect-square grid place-items-center rounded-full bg-accent-yellow/20 text-xl ring-2 ring-ink-900 transition hover:scale-105"
                 >
                   {b.icon ?? '🏅'}
                 </div>
@@ -121,9 +178,9 @@ export function MemberDashboard({
               {Array.from({ length: Math.max(0, 10 - badges.length) }).map((_, i) => (
                 <div
                   key={`l-${i}`}
-                  className="grid h-12 w-12 place-items-center rounded-full bg-cream-200/60 text-[10px] uppercase tracking-wider text-ink-400 ring-2 ring-dashed ring-ink-400"
+                  className="aspect-square grid place-items-center rounded-full bg-cream-200/60 text-[10px] uppercase tracking-wider text-ink-400 ring-2 ring-dashed ring-ink-400"
                 >
-                  locked
+                  lock
                 </div>
               ))}
             </div>
@@ -170,30 +227,39 @@ export function MemberDashboard({
         )}
 
         {isParent && pendingApproval.length > 0 && (
-          <section className="card p-5">
-            <h3 className="mb-3 font-display text-lg font-extrabold">Approval queue</h3>
+          <section className="card p-5 sm:p-6 2xl:p-7">
+            <h3 className="mb-3 font-display text-lg font-extrabold sm:text-xl">
+              Approval queue
+            </h3>
             <ul className="flex flex-col gap-2">
               {pendingApproval.map((i) => (
                 <li
                   key={i.id}
-                  className="flex items-center justify-between rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900"
+                  className="flex flex-col items-stretch justify-between gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900 sm:flex-row sm:items-center"
                 >
-                  <div>
-                    <div className="text-sm font-semibold">{i.choreName}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{i.choreName}</div>
                     <div className="text-xs text-ink-500">
                       Done {i.completedAt ? relativePast(i.completedAt) : ''} ·{' '}
                       {money(i.amountCents)}
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-shrink-0 gap-2">
                     <button
-                      className="btn-money !py-1.5"
-                      onClick={() => action.mutate({ instanceId: i.id, action: 'approve' })}
+                      className="btn-money flex-1 sm:flex-initial"
+                      onClick={(e) => {
+                        const r = e.currentTarget.getBoundingClientRect();
+                        celebrate(
+                          { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+                          { pieces: 24, spread: 140, durationMs: 1600 },
+                        );
+                        action.mutate({ instanceId: i.id, action: 'approve' });
+                      }}
                     >
                       Approve
                     </button>
                     <button
-                      className="btn-secondary !py-1.5"
+                      className="btn-secondary flex-1 sm:flex-initial"
                       onClick={() => action.mutate({ instanceId: i.id, action: 'reject' })}
                     >
                       Reject
@@ -205,19 +271,31 @@ export function MemberDashboard({
           </section>
         )}
 
-        <section className="card p-5">
-          <h3 className="mb-3 font-display text-lg font-extrabold">Recent activity</h3>
+        <section className="card p-5 sm:p-6 2xl:p-7">
+          <h3 className="mb-3 font-display text-lg font-extrabold sm:text-xl">
+            Recent activity
+          </h3>
           {recent.length === 0 ? (
-            <p className="text-sm text-ink-500">No earnings yet.</p>
+            <EmptyState
+              illustration="activity"
+              compact
+              title="No earnings yet"
+              body="Approved chores show up here as soon as a parent ticks them off."
+            />
           ) : (
             <ul className="flex flex-col divide-y-2 divide-cream-200">
               {recent.map((r) => (
-                <li key={r.id} className="flex items-center justify-between py-2">
-                  <div>
-                    <div className="text-sm font-semibold">{r.choreName}</div>
+                <li
+                  key={r.id}
+                  className="flex items-center justify-between gap-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{r.choreName}</div>
                     <div className="text-xs text-ink-500">{relativePast(r.earnedAt)}</div>
                   </div>
-                  <span className="money-amt text-sm">{money(r.amountCents)}</span>
+                  <span className="money-amt flex-shrink-0 text-sm sm:text-base">
+                    {money(r.amountCents)}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -278,28 +356,33 @@ function GoalCard({
   editable?: boolean;
 }) {
   const qc = useQueryClient();
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const prevHitAt = useRef<string | null>(goal.hitAt ?? null);
   const del = useMutation({
     mutationFn: () => api.delete(`/api/goals/${goal.id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['goals'] }),
   });
+  // Fire confetti the moment a goal flips from in-progress to complete.
+  useEffect(() => {
+    if (!prevHitAt.current && goal.hitAt) {
+      celebrate(cardRef.current, { pieces: 80, spread: 280 });
+      toastMoney('Goal hit!', goal.name);
+    }
+    prevHitAt.current = goal.hitAt ?? null;
+  }, [goal.hitAt, goal.name]);
+  // In-progress goals use the member's accent (or money green by default).
+  // Hit goals turn solid money-green. Never red — red reads as "loss".
+  const barColor = goal.hitAt ? '#0F6E37' : accent;
   return (
-    <div className="card p-5">
+    <div ref={cardRef} className="card p-5 sm:p-6 2xl:p-7">
       <header className="mb-2 flex items-baseline justify-between gap-2">
-        <h3 className="page-tag truncate uppercase">
-          GOAL · {goal.name}
-        </h3>
-        <div className="text-sm">
-          <span className="money-amt text-accent-red">
-            {money(goal.progressCents)}
-          </span>
+        <h3 className="page-tag truncate uppercase">GOAL · {goal.name}</h3>
+        <div className="text-sm tabular-nums">
+          <span className="money-amt">{money(goal.progressCents)}</span>
           <span className="ml-1 text-ink-500"> / {money(goal.targetCents)}</span>
         </div>
       </header>
-      <ProgressBar
-        percent={goal.percent}
-        color={goal.hitAt ? '#0F6E37' : '#DB4646'}
-        height="lg"
-      />
+      <ProgressBar percent={goal.percent} color={barColor} height="lg" />
       <div className="mt-2 flex items-center justify-between text-xs text-ink-500">
         <span>
           {goal.hitAt
@@ -321,8 +404,6 @@ function GoalCard({
           </button>
         )}
       </div>
-      {/* Accent indicator so colored progress matches member */}
-      <span aria-hidden className="sr-only" style={{ color: accent }} />
     </div>
   );
 }
@@ -375,7 +456,11 @@ function NewGoalForm({ member, onDone }: { member: Member; onDone: () => void })
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['goals'] });
+      toastSuccess('Goal added', name.trim());
       onDone();
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t save', err.message);
     },
   });
 
@@ -443,10 +528,12 @@ function NewGoalForm({ member, onDone }: { member: Member; onDone: () => void })
 
 function SmallTile({ label, big, sub }: { label: string; big: string; sub?: string }) {
   return (
-    <div className="card p-4">
-      <div className="page-tag">{label}</div>
-      <div className="font-display text-2xl font-extrabold tracking-tight">{big}</div>
-      {sub && <div className="mt-0.5 text-xs text-ink-500">{sub}</div>}
+    <div className="card p-4 sm:p-5 2xl:p-6">
+      <div className="page-tag truncate">{label}</div>
+      <div className="font-display text-2xl font-extrabold tracking-tight tabular-nums sm:text-3xl 2xl:text-4xl">
+        {big}
+      </div>
+      {sub && <div className="mt-0.5 text-xs text-ink-500 sm:text-sm">{sub}</div>}
     </div>
   );
 }

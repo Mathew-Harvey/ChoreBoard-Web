@@ -5,3 +5,21 @@ dist
 .env.local
 *.log
 .DS_Store
+
+# Capacitor — generated native shells.
+# We commit ios/ and android/ (Capacitor convention) but ignore build output.
+ios/App/build/
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+ios/DerivedData/
+android/.gradle/
+android/.idea/
+android/app/build/
+android/app/release/
+android/build/
+android/captures/
+android/local.properties
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist

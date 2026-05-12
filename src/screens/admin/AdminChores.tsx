@@ -4,6 +4,7 @@ import { api, ApiError } from '../../lib/api';
 import type { Cadence, Chore } from '../../lib/types';
 import { money, readableCadence } from '../../lib/format';
 import { ChoreIcon } from '../../ui/primitives';
+import { toastError, toastSuccess } from '../../ui/Toast';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -27,11 +28,15 @@ export function AdminChores() {
       }
       return api.post('/api/chores', body);
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ['chores'] });
       qc.invalidateQueries({ queryKey: ['board'] });
       setEditing(null);
       setCreating(false);
+      toastSuccess(vars.id ? 'Chore updated' : 'Chore added', vars.name);
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t save chore', err.message);
     },
   });
   const del = useMutation({
@@ -39,12 +44,17 @@ export function AdminChores() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['chores'] });
       qc.invalidateQueries({ queryKey: ['board'] });
+      toastSuccess('Chore archived');
     },
   });
   const spawn = useMutation({
     mutationFn: (id: string) => api.post(`/api/chores/${id}/spawn`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['board'] });
+      toastSuccess('Added to the board');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t spawn', err.message);
     },
   });
 
@@ -58,11 +68,11 @@ export function AdminChores() {
   );
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4">
-      <div className="flex items-baseline justify-between">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="page-tag">CATALOG</div>
-          <h2 className="font-display text-3xl font-extrabold tracking-tight">
+          <div className="page-tag mb-1">CATALOG</div>
+          <h2 className="font-display text-3xl font-extrabold tracking-tight sm:text-4xl">
             Chore catalog
           </h2>
         </div>
@@ -73,33 +83,38 @@ export function AdminChores() {
 
       {chores.isLoading && <p className="text-ink-500">Loading…</p>}
 
-      <ul className="card divide-y-2 divide-cream-200">
+      <ul className="card divide-y-2 divide-cream-200 overflow-hidden">
         {sorted.map((c) => (
-          <li key={c.id} className="flex flex-wrap items-center gap-3 p-4 sm:flex-nowrap">
-            <ChoreIcon name={c.name} />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span
-                  className={`font-semibold ${
-                    c.active ? '' : 'text-ink-400 line-through'
-                  }`}
-                >
-                  {c.name}
-                </span>
-                {!c.active && <span className="pill">archived</span>}
-                {c.photoRequired && (
-                  <span className="pill bg-accent-blue text-white">📸 photo</span>
-                )}
-              </div>
-              <div className="mt-1 flex flex-wrap items-baseline gap-2 text-xs text-ink-500">
-                <span className="money-amt text-sm">{money(c.amountCents)}</span>
-                <span>·</span>
-                <span>{readableCadence(c.cadenceJson)}</span>
+          <li
+            key={c.id}
+            className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:gap-4 sm:p-5"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <ChoreIcon name={c.name} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`truncate font-semibold ${
+                      c.active ? '' : 'text-ink-400 line-through'
+                    }`}
+                  >
+                    {c.name}
+                  </span>
+                  {!c.active && <span className="pill">archived</span>}
+                  {c.photoRequired && (
+                    <span className="pill bg-accent-blue text-white">📸 photo</span>
+                  )}
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-2 text-xs text-ink-500">
+                  <span className="money-amt text-sm">{money(c.amountCents)}</span>
+                  <span aria-hidden>·</span>
+                  <span className="truncate">{readableCadence(c.cadenceJson)}</span>
+                </div>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 sm:flex-shrink-0">
               <button
-                className="btn-money !py-1.5"
+                className="btn-money"
                 disabled={!c.active || spawn.isPending}
                 title={c.active ? 'Drop one onto the board now' : 'Resume this chore first'}
                 onClick={() => spawn.mutate(c.id)}
@@ -174,25 +189,33 @@ function ChoreEditor({
   const formValid = nameValid && parsed.ok && cadenceValid;
 
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-ink-900/40 backdrop-blur-sm p-4">
-      <div className="card w-full max-w-lg p-6">
-        <div className="mb-4 flex items-baseline justify-between">
+    <div
+      className="fixed inset-0 z-40 flex items-end justify-center bg-ink-900/40 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="card flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-b-none sm:rounded-chunky">
+        <header className="flex items-baseline justify-between border-b-2 border-cream-200 p-5 pb-4 sm:p-6 sm:pb-4">
           <div>
-            <div className="page-tag">CHORE</div>
+            <div className="page-tag mb-1">CHORE</div>
             <h3 className="font-display text-2xl font-extrabold tracking-tight">
               {chore ? 'Edit chore' : 'New chore'}
             </h3>
           </div>
-          <button className="pill" onClick={onCancel}>
+          <button className="pill-tap" onClick={onCancel}>
             Cancel
           </button>
-        </div>
-        <div className="flex flex-col gap-3">
+        </header>
+        <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-5 sm:p-6">
           <Labelled label="Name">
             <input
               className="input"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              autoFocus
             />
           </Labelled>
           <Labelled
@@ -212,10 +235,11 @@ function ChoreEditor({
               Add at least one time / day for this cadence.
             </p>
           )}
-          <div className="flex gap-4 pt-1">
+          <div className="flex flex-wrap gap-4 pt-1">
             <label className="flex items-center gap-2 text-sm font-semibold">
               <input
                 type="checkbox"
+                className="h-4 w-4 accent-ink-900"
                 checked={active}
                 onChange={(e) => setActive(e.target.checked)}
               />
@@ -224,6 +248,7 @@ function ChoreEditor({
             <label className="flex items-center gap-2 text-sm font-semibold">
               <input
                 type="checkbox"
+                className="h-4 w-4 accent-ink-900"
                 checked={photoRequired}
                 onChange={(e) => setPhotoRequired(e.target.checked)}
               />
@@ -239,8 +264,13 @@ function ChoreEditor({
                   : serverError}
             </p>
           )}
+        </div>
+        <footer className="safe-pb sticky bottom-0 flex gap-2 border-t-2 border-cream-200 bg-paper p-4 sm:p-5">
+          <button className="btn-secondary flex-1" onClick={onCancel}>
+            Cancel
+          </button>
           <button
-            className="btn-primary mt-2"
+            className="btn-primary flex-1"
             disabled={!formValid || isSaving}
             onClick={() => {
               if (!formValid) return;
@@ -254,9 +284,9 @@ function ChoreEditor({
               });
             }}
           >
-            {isSaving ? 'Saving…' : 'Save'}
+            {isSaving ? 'Saving…' : 'Save chore'}
           </button>
-        </div>
+        </footer>
       </div>
     </div>
   );
@@ -450,7 +480,7 @@ function DayPicker({
   single?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="grid grid-cols-7 gap-1">
       {DAYS.map((d, i) => {
         const selected = value.includes(i);
         return (
@@ -461,9 +491,12 @@ function DayPicker({
               if (single) return onChange([i]);
               onChange(selected ? value.filter((x) => x !== i) : [...value, i].sort());
             }}
-            className={`rounded-lg px-2.5 py-1 text-xs font-semibold ring-2 ring-ink-900 ${
-              selected ? 'bg-ink-900 text-cream-50' : 'bg-paper text-ink-700'
+            className={`rounded-lg px-1 py-2 text-xs font-bold ring-2 ring-ink-900 transition active:translate-y-px ${
+              selected
+                ? 'bg-ink-900 text-cream-50 shadow-paper-sm'
+                : 'bg-paper text-ink-700 hover:bg-cream-50'
             }`}
+            aria-pressed={selected}
           >
             {d}
           </button>

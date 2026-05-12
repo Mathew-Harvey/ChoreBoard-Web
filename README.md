@@ -92,6 +92,63 @@ queries so the UI catches up within ~one round trip.
 npm run build
 ```
 
-Outputs to `dist/`. Point the API's `WEB_DIST_DIR` at this folder and the
-Fastify server will serve the SPA at `/` alongside the API at `/api/*` — single
-origin, single deploy.
+Outputs to `dist/`. The same `dist/` is the payload for both:
+
+- **Web** at `https://app.choreboard.io` — point the API's `WEB_DIST_DIR` at
+  this folder and the Fastify server serves the SPA at `/` alongside the API
+  at `/api/*`. Same Render service, two CNAMEs (`app.` and `api.`).
+- **Native iOS + Android** via Capacitor (see below).
+
+## Native (iOS + Android)
+
+We ship to the App Store and Play Store as **Capacitor** wrappers around this
+exact SPA. There is no React Native rewrite. See `../ChoreBoard-Api/spec.md`
+§16 for the full strategy (bundle IDs, store policy posture, billing).
+
+### One-time scaffolding
+
+`@capacitor/core`, the CLI, the iOS and Android platforms, and the runtime
+plugins (`push-notifications`, `camera`, `haptics`, `preferences`, `app`,
+`status-bar`, `splash-screen`) are already installed. Configuration lives in
+`capacitor.config.ts`:
+
+- **App ID:** `io.choreboard.app`
+- **App name:** `ChoreBoard`
+- **Web dir:** `dist`
+
+The `ios/` and `android/` folders are not yet generated, because each one
+requires platform-specific tooling that has to be installed locally:
+
+| Platform | Generate with                  | Requires                        |
+|----------|--------------------------------|---------------------------------|
+| Android  | `npm run build && npx cap add android` | JDK 17+, Android Studio      |
+| iOS      | `npm run build && npx cap add ios`     | macOS, Xcode 15+, CocoaPods  |
+
+Run each `cap add` command once, on the right machine, then commit the
+generated folder. From then on the workflow is:
+
+```bash
+npm run cap:sync           # vite build + cap sync (run on any OS)
+npm run cap:open:android   # opens Android Studio (Win/Mac/Linux)
+npm run cap:open:ios       # opens Xcode (Mac only)
+```
+
+### What the SPA needs to behave well inside Capacitor
+
+- **Auth.** When `VITE_BUILD_TARGET=native`, the SPA uses
+  `Authorization: Bearer <session>` instead of the cookie session, because
+  cross-origin cookies from `capacitor://localhost` to `api.choreboard.io`
+  are flaky on iOS WKWebView. The API accepts both transports.
+- **Absolute API base.** Native builds load from `capacitor://localhost`, so
+  `/api/...` relative URLs do not work. Set `VITE_API_BASE_URL=https://api.choreboard.io`
+  for native builds.
+- **Push.** Use `@capacitor/push-notifications` to register an APNs/FCM
+  token on login and `POST /api/devices`. The same notification on the web
+  build still uses Web Push.
+- **Camera.** Use `@capacitor/camera` for chore photos; uploads still go
+  direct to R2 via the existing pre-signed URL endpoint.
+- **Drag-and-drop.** `dnd-kit` already supports touch sensors. Cards opt out
+  of long-press selection (`-webkit-touch-callout: none; user-select: none;`)
+  so iOS does not show the system context menu mid-drag.
+- **Safe areas.** `index.html` sets `viewport-fit=cover`; CSS uses
+  `env(safe-area-inset-*)` on the top bar and bottom dock.

@@ -10,6 +10,9 @@
     height: 100%;
     overscroll-behavior: none;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
   body {
     font-family:
       'Inter Tight', 'Inter', system-ui, -apple-system, BlinkMacSystemFont,
@@ -21,9 +24,10 @@
     text-rendering: optimizeLegibility;
     background-color: theme('colors.cream.100');
     color: theme('colors.ink.900');
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  /* Page-level "paper" background — repeats the cream tone behind dot
-     indicators so transitions don't show a seam. */
+  /* Page-level "paper" background — radial cream washes behind everything. */
   body::before {
     content: '';
     position: fixed;
@@ -34,12 +38,77 @@
     z-index: -1;
     pointer-events: none;
   }
+  /* Tighter, dark-friendly scrollbars so the dark Available column doesn't
+     get the chrome of a 1995 file picker on Windows. */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(16, 24, 43, 0.18);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(16, 24, 43, 0.28);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  /* Honor reduced-motion preferences across the board. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+  /* Keyboard focus indicator that doesn't show on mouse clicks. */
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px theme('colors.paper'),
+      0 0 0 4px theme('colors.accent.blue');
+    border-radius: 6px;
+  }
+
+  /* Skip-to-content link — visually hidden until focused. Lives in App.tsx. */
+  .skip-link {
+    position: fixed;
+    top: -100px;
+    left: 12px;
+    z-index: 100;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: theme('colors.ink.900');
+    color: theme('colors.cream.50');
+    font-weight: 700;
+    box-shadow: 4px 4px 0 0 rgba(16, 24, 43, 0.9);
+    transition: top 120ms ease-out;
+  }
+  .skip-link:focus,
+  .skip-link:focus-visible {
+    top: 12px;
+  }
 }
 
 @layer components {
   /* Buttons --------------------------------------------------------------- */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
+    min-height: 40px;
+  }
+  /* Bigger comfortable hit area for the kitchen touchscreen. */
+  @media (pointer: coarse) {
+    .btn {
+      min-height: 44px;
+    }
   }
   .btn-primary {
     @apply btn bg-ink-900 text-cream-50 ring-2 ring-ink-900 shadow-paper-sm hover:bg-ink-800;
@@ -56,6 +125,17 @@
   .btn-money {
     @apply btn bg-money text-white ring-2 ring-ink-900 shadow-paper-sm hover:brightness-95;
   }
+  .btn-icon {
+    @apply inline-grid place-items-center rounded-xl text-ink-700 transition hover:bg-ink-900/10;
+    min-height: 36px;
+    min-width: 36px;
+  }
+  @media (pointer: coarse) {
+    .btn-icon {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
 
   /* Cards ----------------------------------------------------------------- */
   .card {
@@ -70,12 +150,34 @@
 
   /* Inputs ---------------------------------------------------------------- */
   .input {
-    @apply w-full rounded-xl bg-paper px-3 py-2 ring-2 ring-ink-900/80 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-accent-blue;
+    @apply w-full rounded-xl bg-paper px-3 text-sm font-medium ring-2 ring-ink-900/80 placeholder:text-ink-400 focus:outline-none focus:ring-2 focus:ring-accent-blue;
+    min-height: 40px;
+    padding-block: 0.5rem;
+  }
+  @media (pointer: coarse) {
+    .input {
+      min-height: 44px;
+      font-size: 16px; /* avoid iOS zoom on focus */
+    }
+  }
+  /* Variant used inside the dark "Available" column. */
+  .input-on-dark {
+    @apply input bg-cream-50/10 text-cream-50 placeholder:text-cream-50/40 ring-cream-50/30 focus:ring-accent-yellow;
   }
 
   /* Pills ----------------------------------------------------------------- */
   .pill {
-    @apply inline-flex items-center gap-1 rounded-full bg-ink-900/10 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-900;
+    @apply inline-flex select-none items-center gap-1 rounded-full bg-ink-900/10 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-900;
+  }
+  .pill-tap {
+    @apply pill cursor-pointer transition hover:bg-ink-900/15 active:translate-y-px;
+    min-height: 28px;
+    padding-inline: 0.75rem;
+  }
+  @media (pointer: coarse) {
+    .pill-tap {
+      min-height: 36px;
+    }
   }
   .pill-dark {
     @apply pill bg-ink-900 text-cream-50;
@@ -107,5 +209,187 @@
   }
   .page-tag-strong {
     @apply font-display text-sm font-bold text-ink-900;
+  }
+
+  /* Horizontal scroll containers with snap + edge fades. */
+  .h-scroll-snap {
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 1.25rem;
+    -webkit-overflow-scrolling: touch;
+  }
+  .h-scroll-snap > * {
+    scroll-snap-align: start;
+  }
+  .h-scroll-fade {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      black 24px,
+      black calc(100% - 24px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent 0,
+      black 24px,
+      black calc(100% - 24px),
+      transparent 100%
+    );
+  }
+
+  /* Drop-zone outline used by Kanban targets. */
+  .drop-target {
+    @apply transition;
+    outline-offset: 4px;
+  }
+  .drop-target--over {
+    outline: 3px dashed theme('colors.accent.blue');
+    outline-offset: 6px;
+    border-radius: theme('borderRadius.chunky');
+  }
+
+  /* Safe-area helpers for the kitchen-wall iPad install. */
+  .safe-pt {
+    padding-top: max(env(safe-area-inset-top), 0px);
+  }
+  .safe-pb {
+    padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  }
+  .safe-px {
+    padding-left: max(env(safe-area-inset-left), 0px);
+    padding-right: max(env(safe-area-inset-right), 0px);
+  }
+
+  /* Legal pages (/privacy + /terms) ------------------------------------- */
+  /* Long-form prose with the same paper aesthetic as the rest of the app. */
+  .legal-link {
+    @apply text-ink-900 underline decoration-ink-900/30 decoration-2 underline-offset-[3px] transition hover:decoration-ink-900;
+  }
+  .legal-section {
+    @apply mt-9;
+    scroll-margin-top: 120px;
+  }
+  .legal-section + .legal-section {
+    @apply border-t border-ink-900/10 pt-8;
+  }
+  .legal-h2 {
+    @apply mb-3 flex items-baseline gap-3 font-display text-xl font-extrabold tracking-tight text-ink-900 sm:text-2xl;
+  }
+  .legal-num {
+    @apply font-display text-base font-bold text-ink-400 tabular-nums sm:text-lg;
+  }
+  .legal-h3 {
+    @apply mt-5 mb-1.5 text-sm font-bold uppercase tracking-[0.08em] text-ink-700;
+  }
+  .legal-prose p {
+    @apply text-[15px] leading-relaxed text-ink-700;
+  }
+  .legal-prose p + p,
+  .legal-prose p + ul,
+  .legal-prose p + ol,
+  .legal-prose ul + p,
+  .legal-prose ol + p,
+  .legal-prose .legal-h3 + p {
+    @apply mt-3;
+  }
+  .legal-prose ul.bul,
+  .legal-prose ol.num {
+    @apply mt-2 flex flex-col gap-2 pl-6 text-[15px] leading-relaxed text-ink-700;
+  }
+  .legal-prose ul.bul {
+    list-style: disc;
+  }
+  .legal-prose ol.num {
+    list-style: decimal;
+  }
+  .legal-prose ul.bul li::marker,
+  .legal-prose ol.num li::marker {
+    color: rgba(16, 24, 43, 0.45);
+  }
+  .legal-prose strong {
+    @apply font-semibold text-ink-900;
+  }
+  .legal-prose code {
+    @apply rounded bg-ink-900/10 px-1.5 py-0.5 font-mono text-[0.92em];
+  }
+  .legal-prose table.processors {
+    @apply mt-3 w-full overflow-hidden rounded-2xl text-left text-sm ring-2 ring-ink-900;
+    border-collapse: collapse;
+    background: theme('colors.paper');
+  }
+  .legal-prose table.processors th {
+    @apply bg-cream-200 px-3 py-2.5 text-[11px] font-bold uppercase tracking-[0.06em] text-ink-700;
+  }
+  .legal-prose table.processors td {
+    @apply px-3 py-2.5 align-top text-ink-700;
+    border-top: 1px solid rgba(16, 24, 43, 0.1);
+  }
+  .legal-prose table.processors tr:first-child td {
+    border-top: none;
+  }
+  /* Anchor jumps from in-app links should sit clear of the sticky chrome. */
+  .legal-prose [id] {
+    scroll-margin-top: 120px;
+  }
+
+  /* Loading skeleton block, used while board / stats stream in. */
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      rgba(16, 24, 43, 0.05) 25%,
+      rgba(16, 24, 43, 0.12) 50%,
+      rgba(16, 24, 43, 0.05) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+    border-radius: 12px;
+  }
+}
+
+@layer utilities {
+  /* Used when we need an explicit hit-target without restyling the visual. */
+  .tap-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  /* Hide global chrome (TopBar + DotIndicator) when the family dashboard is
+     running in ambient TV mode. The Family / TVMode components set
+     `data-ambient="1"` / `data-tv="1"` on `<body>` while they own the screen. */
+  body[data-ambient='1'] [data-chrome='topbar'],
+  body[data-ambient='1'] [data-chrome='dots'],
+  body[data-ambient='1'] [data-chrome='legal'],
+  body[data-tv='1'] [data-chrome='topbar'],
+  body[data-tv='1'] [data-chrome='dots'],
+  body[data-tv='1'] [data-chrome='legal'] {
+    display: none !important;
+  }
+  /* TV mode overrides the global cream paper background so the dark theme
+     reads as a proper kitchen-wall display. */
+  body[data-tv='1'] {
+    background-color: theme('colors.ink.900') !important;
+    color: theme('colors.cream.50');
+  }
+  body[data-tv='1']::before {
+    display: none;
+  }
+
+  /* Slide-progress strip animation used by TVMode. */
+  @keyframes progressFill {
+    from { width: 0%; }
+    to { width: 100%; }
+  }
+
+  /* When a Kanban drag is in flight, pulse the droppable lanes so it's
+     visually obvious where a card can land. Set by KanbanDesktop on
+     dragstart / cleared on dragend. */
+  @keyframes dragHint {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(50, 83, 215, 0); }
+    50% { box-shadow: 0 0 0 4px rgba(50, 83, 215, 0.35); }
+  }
+  body[data-dragging='1'] [data-droppable='1'] {
+    animation: dragHint 1.6s ease-in-out infinite;
   }
 }

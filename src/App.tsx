@@ -1,6 +1,7 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { useSession } from './lib/session';
 import { useFamilyEvents } from './lib/useFamilyEvents';
+import { useNativePush } from './lib/nativePush';
 import { AuthScreen } from './screens/AuthScreen';
 import { KidPinScreen } from './screens/KidPinScreen';
 import { Desktops } from './screens/Desktops';
@@ -8,11 +9,17 @@ import { AdminLayout } from './screens/admin/AdminLayout';
 import { AdminChores } from './screens/admin/AdminChores';
 import { AdminFamily } from './screens/admin/AdminFamily';
 import { AdminLedger } from './screens/admin/AdminLedger';
+import { AdminBilling } from './screens/admin/AdminBilling';
+import { PrivacyPolicy } from './screens/legal/PrivacyPolicy';
+import { TermsOfService } from './screens/legal/TermsOfService';
 
 export function App() {
   const session = useSession();
   const signedIn = !!session.data;
+  const isParent = session.data?.kind === 'parent';
+  const navigate = useNavigate();
   useFamilyEvents(signedIn);
+  useNativePush({ enabled: signedIn, isParent, navigate });
 
   if (session.isLoading) {
     return (
@@ -20,30 +27,42 @@ export function App() {
     );
   }
 
+  // /privacy and /terms are public — they need to render the same way for a
+  // signed-out visitor reading them at signup time and for a signed-in family
+  // reviewing them later. Declared before the auth gate below so the policy
+  // pages always win.
   if (!signedIn) {
     return (
       <Routes>
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
         <Route path="/kid" element={<KidPinScreen />} />
         <Route path="*" element={<AuthScreen />} />
       </Routes>
     );
   }
 
-  const isParent = session.data!.kind === 'parent';
-
   return (
-    <Routes>
-      <Route path="/" element={<Desktops />} />
-      <Route path="/desktop/:idx" element={<Desktops />} />
-      {isParent && (
-        <Route path="/admin" element={<AdminLayout />}>
-          <Route index element={<Navigate to="chores" replace />} />
-          <Route path="chores" element={<AdminChores />} />
-          <Route path="family" element={<AdminFamily />} />
-          <Route path="ledger" element={<AdminLedger />} />
-        </Route>
-      )}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <a href="#cb-main" className="skip-link">
+        Skip to content
+      </a>
+      <Routes>
+        <Route path="/" element={<Desktops />} />
+        <Route path="/desktop/:idx" element={<Desktops />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
+        {isParent && (
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<Navigate to="chores" replace />} />
+            <Route path="chores" element={<AdminChores />} />
+            <Route path="family" element={<AdminFamily />} />
+            <Route path="ledger" element={<AdminLedger />} />
+            <Route path="billing" element={<AdminBilling />} />
+          </Route>
+        )}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   );
 }

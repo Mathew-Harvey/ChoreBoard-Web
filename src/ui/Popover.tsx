@@ -79,11 +79,12 @@ export function MenuItem({
       role="menuitem"
       disabled={disabled}
       onClick={onClick}
-      className={`block w-full rounded-lg px-3 py-1.5 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+      className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
         destructive
-          ? 'text-accent-red hover:bg-accent-red/10'
-          : 'text-ink-900 hover:bg-ink-900/5'
+          ? 'text-accent-red hover:bg-accent-red/10 active:bg-accent-red/20'
+          : 'text-ink-900 hover:bg-ink-900/5 active:bg-ink-900/10'
       }`}
+      style={{ minHeight: 36 }}
     >
       {children}
     </button>

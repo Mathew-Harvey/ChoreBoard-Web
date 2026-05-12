@@ -1,5 +1,8 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { setSseStatus } from './sseStatus';
+import { isNative, resolveApiUrl } from './runtime';
+import { getCachedToken } from './sessionToken';
 
 /**
  * Subscribe to /api/events while authenticated and translate server events
@@ -8,17 +11,46 @@ import { useQueryClient } from '@tanstack/react-query';
  * Each event invalidates the smallest sensible set of queries — but for
  * fan-out events like `week.closed` and `family.updated` we just bust most
  * of the dashboard. The cost is one extra fetch per minute.
+ *
+ * Transport:
+ *   - **Web**: relative URL + `withCredentials` so the cookie is sent.
+ *   - **Native**: absolute URL pointing at api.choreboard.io with the
+ *     session token passed as `?session=` (EventSource has no API for
+ *     custom headers, so Bearer-in-header isn't an option). The server's
+ *     auth plugin honours `?session=` only on /api/events.
  */
 export function useFamilyEvents(enabled: boolean): void {
   const qc = useQueryClient();
 
   useEffect(() => {
-    if (!enabled) return;
-    const es = new EventSource('/api/events', { withCredentials: true });
+    if (!enabled) {
+      setSseStatus('closed');
+      return;
+    }
+    const url = buildEventsUrl();
+    if (!url) {
+      // Native, signed in, but token not yet hydrated. The next render
+      // (after `loadStoredToken` resolves) will try again.
+      setSseStatus('closed');
+      return;
+    }
+    setSseStatus('connecting');
+    const es = new EventSource(url, { withCredentials: !isNative() });
 
     const inv = (...keys: string[][]) => {
       for (const key of keys) qc.invalidateQueries({ queryKey: key });
     };
+
+    // Track live status. readyState transitions:
+    //   0 connecting → 1 open → (server closes or net drops) → 0 connecting again
+    //   any unrecoverable error → 2 closed (EventSource never tries again).
+    // We poll alongside the native handlers so transient drops are caught.
+    es.onopen = () => setSseStatus('open');
+    const poll = setInterval(() => {
+      if (es.readyState === EventSource.OPEN) setSseStatus('open');
+      else if (es.readyState === EventSource.CONNECTING) setSseStatus('connecting');
+      else setSseStatus('closed');
+    }, 5_000);
 
     const handlers: Record<string, (raw: any) => void> = {
       'instance.claimed': () => inv(['board']),
@@ -78,14 +110,28 @@ export function useFamilyEvents(enabled: boolean): void {
     }
 
     es.onerror = () => {
-      // EventSource auto-reconnects; nothing to do.
+      // EventSource auto-reconnects; the readyState poll above will catch
+      // the transition.
+      if (es.readyState === EventSource.CLOSED) setSseStatus('closed');
+      else setSseStatus('connecting');
     };
 
     return () => {
+      clearInterval(poll);
       for (const [name, fn] of listeners) {
         es.removeEventListener(name, fn as EventListener);
       }
       es.close();
+      setSseStatus('closed');
     };
   }, [enabled, qc]);
+}
+
+function buildEventsUrl(): string | null {
+  if (isNative()) {
+    const token = getCachedToken();
+    if (!token) return null;
+    return `${resolveApiUrl('/api/events')}?session=${encodeURIComponent(token)}`;
+  }
+  return resolveApiUrl('/api/events');
 }
