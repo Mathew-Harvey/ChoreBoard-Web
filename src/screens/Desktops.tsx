@@ -63,14 +63,42 @@ export function Desktops() {
   };
 
   // Arrow-key + swipe navigation. Inputs and contentEditable elements get
-  // a pass so typing $ values doesn't change desktop.
+  // a pass so typing $ values doesn't change desktop. We're also careful
+  // to ignore swipes that "belong" to something else on the page:
+  //   - touches that started on a dnd-kit draggable (long-press → card drag)
+  //   - touches that started inside a horizontally-scrollable container
+  //     (the kanban column row, any internal horizontal scroller). Those
+  //     gestures are scrolling within that container, not paging desktops.
+  //   - any touch fired while a drag is in flight (body[data-dragging='1']).
+  //
+  // We also gate on a mix of distance + velocity (~minimum px/ms) so a slow
+  // accidental drag doesn't flip pages, but a confident flick does.
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
+  const touchStartT = useRef<number>(0);
+  const touchValid = useRef<boolean>(false);
   useEffect(() => {
     const isTypable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName;
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+    };
+    // Walks up from `el` looking for the first ancestor that can scroll
+    // horizontally — that ancestor "owns" any horizontal touch motion.
+    const hasHorizontalScrollAncestor = (el: EventTarget | null): boolean => {
+      let node: HTMLElement | null = el instanceof HTMLElement ? el : null;
+      while (node && node !== document.body) {
+        const style = getComputedStyle(node);
+        const ox = style.overflowX;
+        const canScroll = ox === 'auto' || ox === 'scroll';
+        if (canScroll && node.scrollWidth > node.clientWidth + 1) return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
+    const isInDraggable = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      return !!el.closest('[data-dnd-draggable], [data-droppable="1"]');
     };
     const onKey = (e: KeyboardEvent) => {
       if (isTypable(e.target)) return;
@@ -78,26 +106,58 @@ export function Desktops() {
       else if (e.key === 'ArrowLeft') setIdx(idx - 1);
     };
     const onTouchStart = (e: TouchEvent) => {
+      touchValid.current = false;
+      // Multi-touch (pinch/zoom) is never a desktop swipe.
+      if (e.touches.length !== 1) return;
       if (isTypable(e.target)) return;
+      // Don't compete with @dnd-kit or with horizontal scrollers.
+      if (isInDraggable(e.target)) return;
+      if (hasHorizontalScrollAncestor(e.target)) return;
       touchStartX.current = e.touches[0]?.clientX ?? null;
       touchStartY.current = e.touches[0]?.clientY ?? null;
+      touchStartT.current = e.timeStamp;
+      touchValid.current = true;
     };
     const onTouchEnd = (e: TouchEvent) => {
-      if (touchStartX.current == null) return;
+      if (!touchValid.current || touchStartX.current == null) return;
+      // If a drag started between touchstart and touchend, abandon. This
+      // also catches the case where the user long-pressed a card and the
+      // page-swipe handler shouldn't fire on the release.
+      if (document.body.dataset.dragging === '1') {
+        touchValid.current = false;
+        return;
+      }
       const dx = (e.changedTouches[0]?.clientX ?? 0) - touchStartX.current;
       const dy = (e.changedTouches[0]?.clientY ?? 0) - (touchStartY.current ?? 0);
+      const dt = Math.max(1, e.timeStamp - touchStartT.current);
+      const vx = Math.abs(dx) / dt; // px per ms
       touchStartX.current = null;
       touchStartY.current = null;
-      // Only treat as a horizontal swipe if vertical motion is small.
-      if (Math.abs(dx) > 90 && Math.abs(dy) < 60) setIdx(idx + (dx < 0 ? 1 : -1));
+      touchValid.current = false;
+      // Two routes to a valid swipe:
+      //   1. Long, deliberate horizontal drag (≥ 110px, low vertical).
+      //   2. Quick flick (≥ 60px and ≥ 0.5 px/ms with low vertical).
+      const mostlyHorizontal = Math.abs(dx) > Math.abs(dy) * 1.5;
+      const longSwipe = Math.abs(dx) > 110 && Math.abs(dy) < 70 && mostlyHorizontal;
+      const flick = Math.abs(dx) > 60 && vx > 0.5 && mostlyHorizontal;
+      if (longSwipe || flick) setIdx(idx + (dx < 0 ? 1 : -1));
+    };
+    const onTouchCancel = () => {
+      touchStartX.current = null;
+      touchStartY.current = null;
+      touchValid.current = false;
     };
     window.addEventListener('keydown', onKey);
-    window.addEventListener('touchstart', onTouchStart);
-    window.addEventListener('touchend', onTouchEnd);
+    // Passive listeners — we never preventDefault() on these, so this lets
+    // the browser optimize scrolling and avoids the "non-passive" warning.
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', onTouchCancel, { passive: true });
     return () => {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('touchstart', onTouchStart);
       window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('touchcancel', onTouchCancel);
     };
   }, [idx, total]);
 

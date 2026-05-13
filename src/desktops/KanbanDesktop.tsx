@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  KeyboardSensor,
+  MouseSensor,
   TouchSensor,
   useDraggable,
   useDroppable,
@@ -87,9 +88,24 @@ export function KanbanDesktop({
   const memberStatsLookup = rollupByKey(memberStatsQ.data);
   const [dragging, setDragging] = useState<BoardInstance | null>(null);
 
+  // Sensor split rationale:
+  //   - MouseSensor only listens to mouse events → snappy distance activation
+  //     for laptop/desktop without any delay.
+  //   - TouchSensor only listens to touch events → uses a long-press delay so
+  //     the user can still scroll the board / a column by touching a card. The
+  //     drag only "lifts" once the finger has held still for ~200ms (iPad-ish).
+  //   - We deliberately do NOT use PointerSensor here. On Windows touchscreen
+  //     laptops PointerEvents fire for both mouse AND touch, which used to
+  //     race TouchSensor's delay and turn every horizontal scroll attempt
+  //     into an accidental drag.
+  //   - KeyboardSensor keeps drag-and-drop accessible (Tab to focus, Space to
+  //     pick up, arrows to move, Space/Enter to drop, Escape to cancel).
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 110, tolerance: 8 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 6 },
+    }),
+    useSensor(KeyboardSensor),
   );
 
   const action = useMutation({
@@ -288,7 +304,22 @@ export function KanbanDesktop({
   const maxLb = Math.max(1, ...lb.map((e) => e.amountCents));
 
   return (
-    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => {
+        setDragging(null);
+        delete document.body.dataset.dragging;
+      }}
+      // Tighter autoscroll thresholds + gentler acceleration so the kanban
+      // row glides under the dragged card instead of jerking on touch.
+      autoScroll={{
+        threshold: { x: 0.18, y: 0.18 },
+        acceleration: 8,
+        interval: 5,
+      }}
+    >
       <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:gap-5 sm:p-7 2xl:p-10">
         <div className="mx-auto w-full max-w-[1800px]">
           <DesktopTitle
@@ -364,9 +395,9 @@ export function KanbanDesktop({
         </div>
       </div>
 
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay dropAnimation={null} zIndex={9999}>
         {dragging && (
-          <div className="rotate-2 scale-[1.04] drop-shadow-[8px_8px_0_rgba(16,24,43,0.55)]">
+          <div className="pointer-events-none animate-dragLift will-change-transform drop-shadow-[10px_14px_0_rgba(16,24,43,0.45)]">
             <CardShell instance={dragging} draggable={false} accentColor={undefined} overlay />
           </div>
         )}
@@ -924,12 +955,24 @@ function DraggableCard({
     id: instance.id,
     disabled: !draggable,
   });
+  // `data-dnd-draggable` lets index.css give the card a subtle "press to lift"
+  // affordance during the TouchSensor delay window. We deliberately do NOT set
+  // `touch-action: none` here — the TouchSensor's delay activation lets the
+  // browser keep handling pan/scroll until a real long-press registers.
   return (
     <div
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      style={{ opacity: isDragging ? 0.25 : 1 }}
+      data-dnd-draggable={draggable ? '' : undefined}
+      data-dnd-dragging={isDragging ? '' : undefined}
+      style={{
+        opacity: isDragging ? 0 : 1,
+        // Skip the press-affordance transition during the active drag so the
+        // (now-invisible) source card doesn't visibly transform underneath
+        // the floating overlay.
+        transition: isDragging ? 'none' : undefined,
+      }}
     >
       <CardShell
         instance={instance}

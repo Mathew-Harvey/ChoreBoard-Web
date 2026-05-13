@@ -103,6 +103,10 @@
   .btn {
     @apply inline-flex select-none items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-semibold transition active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50;
     min-height: 40px;
+    /* `manipulation` keeps tap+zoom for the page in general, but kills
+       double-tap-to-zoom + the legacy ~300ms tap delay on this element. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
   /* Bigger comfortable hit area for the kitchen touchscreen. */
   @media (pointer: coarse) {
@@ -129,6 +133,8 @@
     @apply inline-grid place-items-center rounded-xl text-ink-700 transition hover:bg-ink-900/10;
     min-height: 36px;
     min-width: 36px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
   }
   @media (pointer: coarse) {
     .btn-icon {
@@ -246,6 +252,79 @@
     outline: 3px dashed theme('colors.accent.blue');
     outline-offset: 6px;
     border-radius: theme('borderRadius.chunky');
+  }
+
+  /* ---------------------------------------------------------------------
+   * Touch / drag-and-drop polish
+   *
+   * The Kanban uses @dnd-kit with a TouchSensor that activates on long-press
+   * (~200ms). Between the user's first touch and the drag actually starting,
+   * we want a small "I felt that" affordance — a gentle scale up + lift —
+   * so the interaction feels alive on a touchscreen.
+   *
+   * The transition has a 90ms delay so a quick tap (e.g. the kebab menu)
+   * never visibly transforms; only a sustained press picks up the effect,
+   * which then dovetails into the actual drag overlay.
+   * ------------------------------------------------------------------- */
+  [data-dnd-draggable] {
+    transition:
+      transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1) 90ms,
+      box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1) 90ms,
+      filter 160ms ease-out;
+    transform-origin: center;
+    /* Prevents iOS/Android from showing the gray tap highlight overlay
+       which would muddy the lift effect. */
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    /* Mouse / trackpad: smaller, snappier hover lift; no press delay. */
+    [data-dnd-draggable] {
+      transition:
+        transform 140ms ease-out,
+        box-shadow 140ms ease-out;
+    }
+    [data-dnd-draggable]:hover {
+      transform: translateY(-2px);
+    }
+  }
+  [data-dnd-draggable]:active {
+    transform: scale(1.04) translateY(-2px);
+    filter: brightness(1.02);
+  }
+  /* Once the drag is in flight, kill the press affordance (the source card
+     is invisible at this point — the floating DragOverlay is the show). */
+  [data-dnd-draggable][data-dnd-dragging] {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  /* Lift animation for the floating drag overlay — a tiny pop into the air
+     so the card visibly "leaves the page" when it gets picked up. */
+  @keyframes dragLift {
+    from {
+      transform: scale(1) rotate(0deg);
+    }
+    to {
+      transform: scale(1.06) rotate(1.6deg);
+    }
+  }
+  .animate-dragLift {
+    animation: dragLift 160ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  }
+  /* The grabbing cursor only matters for mouse users; on touch the finger
+     is the cursor. Apply globally during a drag so even when the pointer
+     leaves the card briefly, the cursor stays consistent. */
+  body[data-dragging='1'] {
+    cursor: grabbing;
+  }
+  body[data-dragging='1'] * {
+    cursor: grabbing !important;
+  }
+  /* Scroll-snap with `mandatory` fights @dnd-kit's autoscroll because each
+     scroll tick gets snapped back to a column edge. Drop the snap while a
+     drag is in progress; restore it the moment the drop completes. */
+  body[data-dragging='1'] .h-scroll-snap {
+    scroll-snap-type: none;
   }
 
   /* Safe-area helpers for the kitchen-wall iPad install. */
@@ -387,9 +466,9 @@
      dragstart / cleared on dragend. */
   @keyframes dragHint {
     0%, 100% { box-shadow: 0 0 0 0 rgba(50, 83, 215, 0); }
-    50% { box-shadow: 0 0 0 4px rgba(50, 83, 215, 0.35); }
+    50% { box-shadow: 0 0 0 6px rgba(50, 83, 215, 0.32); }
   }
   body[data-dragging='1'] [data-droppable='1'] {
-    animation: dragHint 1.6s ease-in-out infinite;
+    animation: dragHint 1.4s ease-in-out infinite;
   }
 }
