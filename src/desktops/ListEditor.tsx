@@ -479,7 +479,8 @@ function PriceInput({
 }
 
 function ProductImage({ product, size }: { product: ProductCard; size: number }) {
-  if (!product.image) {
+  const [failed, setFailed] = useState(false);
+  if (!product.image || failed) {
     return (
       <div
         className="grid flex-shrink-0 place-items-center self-center rounded-lg bg-cream-200 ring-1 ring-ink-900/15"
@@ -495,6 +496,7 @@ function ProductImage({ product, size }: { product: ProductCard; size: number })
       src={product.image}
       alt=""
       loading="lazy"
+      onError={() => setFailed(true)}
       className="flex-shrink-0 self-center rounded-lg object-contain ring-1 ring-ink-900/15"
       style={{ width: size, height: size, background: '#fff' }}
     />
