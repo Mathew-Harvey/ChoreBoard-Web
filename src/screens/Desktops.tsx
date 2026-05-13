@@ -9,6 +9,7 @@ import { KanbanDesktop } from '../desktops/KanbanDesktop';
 import { FamilyDashboard } from '../desktops/FamilyDashboard';
 import { BudgetDesktop } from '../desktops/BudgetDesktop';
 import { MemberDashboard } from '../desktops/MemberDashboard';
+import { CalendarDesktop } from '../desktops/CalendarDesktop';
 import { ChampionBanner } from '../ui/ChampionBanner';
 import { MemberAvatar, PageTag, Wordmark } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
@@ -18,6 +19,7 @@ type Desktop =
   | { kind: 'kanban' }
   | { kind: 'family' }
   | { kind: 'budget' }
+  | { kind: 'calendar' }
   | { kind: 'member'; type: 'user' | 'kid'; id: string; name: string; color?: string };
 
 export function Desktops() {
@@ -41,7 +43,12 @@ export function Desktops() {
   });
 
   const desktops = useMemo<Desktop[]>(() => {
-    const list: Desktop[] = [{ kind: 'kanban' }, { kind: 'family' }, { kind: 'budget' }];
+    const list: Desktop[] = [
+      { kind: 'kanban' },
+      { kind: 'family' },
+      { kind: 'budget' },
+      { kind: 'calendar' },
+    ];
     if (board.data) {
       for (const k of board.data.kids) {
         list.push({ kind: 'member', type: 'kid', id: k.id, name: k.name, color: k.color });
@@ -98,7 +105,10 @@ export function Desktops() {
     };
     const isInDraggable = (el: EventTarget | null): boolean => {
       if (!(el instanceof HTMLElement)) return false;
-      return !!el.closest('[data-dnd-draggable], [data-droppable="1"]');
+      // `data-no-swipe="1"` is the opt-out for any future surface that owns
+      // its own touch input — the whiteboard canvas, for instance, where a
+      // horizontal finger drag is a brush stroke, not a desktop swipe.
+      return !!el.closest('[data-dnd-draggable], [data-droppable="1"], [data-no-swipe="1"]');
     };
     const onKey = (e: KeyboardEvent) => {
       if (isTypable(e.target)) return;
@@ -171,6 +181,7 @@ export function Desktops() {
     if (desktop.kind === 'kanban') return { label: 'KANBAN', title: 'The board' };
     if (desktop.kind === 'family') return { label: 'AMBIENT TV', title: 'Family dashboard' };
     if (desktop.kind === 'budget') return { label: 'BUDGET', title: 'Pocket money goals' };
+    if (desktop.kind === 'calendar') return { label: 'CALENDAR', title: 'Family canvas' };
     return { label: 'MEMBER', title: `Member dashboard · ${desktop.name}` };
   })();
 
@@ -218,6 +229,9 @@ export function Desktops() {
         )}
         {desktop?.kind === 'budget' && (
           <BudgetDesktop board={board.data} payoutAt={leaderboard.data?.payoutAt ?? null} />
+        )}
+        {desktop?.kind === 'calendar' && (
+          <CalendarDesktop family={board.data?.family} />
         )}
         {desktop?.kind === 'member' && (
           <MemberDashboard
@@ -571,6 +585,7 @@ function labelFor(d: Desktop): string {
   if (d.kind === 'kanban') return 'Board';
   if (d.kind === 'family') return 'Family';
   if (d.kind === 'budget') return 'Budget';
+  if (d.kind === 'calendar') return 'Calendar';
   return d.name;
 }
 
@@ -578,5 +593,6 @@ function glyphFor(d: Desktop): string {
   if (d.kind === 'kanban') return '🗂';
   if (d.kind === 'family') return '🏡';
   if (d.kind === 'budget') return '💰';
+  if (d.kind === 'calendar') return '📅';
   return '👤';
 }

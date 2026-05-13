@@ -141,6 +141,85 @@ export type Goal = {
   percent: number;
 };
 
+// Calendar Canvas: whiteboards + lists -------------------------------------
+
+export type WhiteboardSummary = {
+  id: string;
+  title: string;
+  date: string | null; // YYYY-MM-DD
+  background: 'paper' | 'grid' | 'dots' | 'dark' | string;
+  width: number;
+  height: number;
+  pointsCount: number;
+  createdByUserId: string | null;
+  createdByKidId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StrokeTool = 'pen' | 'highlight' | 'eraser';
+export type Stroke = {
+  tool: StrokeTool;
+  color: string;
+  size: number;
+  // Each point is [x, y] in canvas coords (0..width, 0..height).
+  points: Array<[number, number]>;
+};
+
+export type Whiteboard = WhiteboardSummary & {
+  strokesJson: Stroke[];
+};
+
+export type ListKind = 'shopping' | 'todo' | 'packing' | 'other';
+
+export type ProductCard = {
+  source: 'woolworths';
+  externalId: string;
+  name: string;
+  brand: string | null;
+  image: string | null;
+  packageSize: string | null;
+  priceCents: number | null;
+  wasPriceCents: number | null;
+  onSpecial: boolean;
+};
+
+export type ListSummary = {
+  id: string;
+  familyId: string;
+  title: string;
+  kind: ListKind;
+  date: string | null;
+  store: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  itemCount: number;
+  checkedCount: number;
+  totalCents: number;
+};
+
+export type ListItem = {
+  id: string;
+  listId: string;
+  familyId: string;
+  text: string;
+  qty: number;
+  productJson: ProductCard | null;
+  unitPriceCents: number | null;
+  checkedAt: string | null;
+  checkedByUserId: string | null;
+  checkedByKidId: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListDetail = {
+  list: Omit<ListSummary, 'itemCount' | 'checkedCount' | 'totalCents'>;
+  items: ListItem[];
+};
+
 export type LedgerEntry = {
   id: string;
   amountCents: number;
