@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useSession } from '../lib/session';
 import {
   addMonths,
   buildCalendarGrid,
@@ -18,7 +19,7 @@ import type {
   WhiteboardSummary,
 } from '../lib/types';
 import { DesktopTitle } from '../ui/primitives';
-import { toastError } from '../ui/Toast';
+import { toastError, toastSuccess } from '../ui/Toast';
 import { WhiteboardEditor } from './WhiteboardEditor';
 import { ListEditor } from './ListEditor';
 import { money } from '../lib/format';
@@ -34,9 +35,11 @@ import { money } from '../lib/format';
  */
 export function CalendarDesktop({ family }: { family?: Family }) {
   const qc = useQueryClient();
+  const session = useSession();
   const tz = family?.timezone;
   const [anchor, setAnchor] = useState<DateKey>(todayKey(tz));
   const [selected, setSelected] = useState<DateKey>(todayKey(tz));
+  const [daySheetOpen, setDaySheetOpen] = useState(false);
   const [open, setOpen] = useState<
     | { kind: 'whiteboard'; id: string }
     | { kind: 'list'; id: string }
@@ -131,6 +134,22 @@ export function CalendarDesktop({ family }: { family?: Family }) {
     },
     onError: () => toastError('Couldn’t create list'),
   });
+  const deleteBoard = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/whiteboards/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['whiteboards'] });
+      toastSuccess('Whiteboard deleted');
+    },
+    onError: () => toastError('Couldn’t delete that whiteboard'),
+  });
+  const deleteList = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/lists/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lists'] });
+      toastSuccess('List deleted');
+    },
+    onError: () => toastError('Couldn’t delete that list'),
+  });
 
   // When an editor is open we hand the main pane over to it. The user uses
   // the back button to return to the calendar; the side rail vanishes so
@@ -156,6 +175,25 @@ export function CalendarDesktop({ family }: { family?: Family }) {
 
   const today = todayKey(tz);
   const selectedDay = byDay.get(selected) ?? { boards: [], lists: [] };
+  const canDelete = (item: { createdByUserId?: string | null; createdByKidId?: string | null }) => {
+    const p = session.data;
+    if (!p) return false;
+    if (p.kind === 'parent') return true;
+    return item.createdByKidId === p.kidId;
+  };
+  const dayActions = {
+    openBoard: (id: string) => {
+      setDaySheetOpen(false);
+      setOpen({ kind: 'whiteboard', id });
+    },
+    openList: (id: string) => {
+      setDaySheetOpen(false);
+      setOpen({ kind: 'list', id });
+    },
+    deleteBoard: (id: string) => deleteBoard.mutate(id),
+    deleteList: (id: string) => deleteList.mutate(id),
+    canDelete,
+  };
 
   return (
     <div className="mx-auto h-full w-full max-w-[1800px] overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
@@ -237,7 +275,10 @@ export function CalendarDesktop({ family }: { family?: Family }) {
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setSelected(key)}
+                  onClick={() => {
+                    setSelected(key);
+                    setDaySheetOpen(true);
+                  }}
                   className={`relative flex min-h-[88px] flex-col gap-1 bg-paper p-1.5 text-left transition hover:bg-cream-100 focus:outline-none focus:ring-2 focus:ring-accent-blue ${
                     inMonth ? '' : 'opacity-50'
                   } ${isSelected ? 'ring-2 ring-ink-900' : ''}`}
@@ -339,27 +380,56 @@ export function CalendarDesktop({ family }: { family?: Family }) {
 
             <div className="mt-4 flex flex-col gap-2">
               {selectedDay.boards.map((b) => (
-                <button
+                <div
                   key={b.id}
-                  onClick={() => setOpen({ kind: 'whiteboard', id: b.id })}
                   className="group flex items-center gap-3 rounded-xl border border-ink-900/15 bg-paper p-2.5 text-left transition hover:border-ink-900 hover:shadow-paper-sm"
                 >
-                  <div className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-accent-blue/15 text-xl">
+                  <button
+                    type="button"
+                    onClick={() => dayActions.openBoard(b.id)}
+                    className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-accent-blue/15 text-xl"
+                    aria-label={`Open ${b.title}`}
+                  >
                     ✏️
-                  </div>
-                  <div className="min-w-0 flex-1">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dayActions.openBoard(b.id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
                     <div className="truncate text-sm font-bold text-ink-900">{b.title}</div>
                     <div className="text-xs text-ink-500">
                       {b.pointsCount === 0
                         ? 'Empty board'
                         : `${b.pointsCount.toLocaleString()} points`}
                     </div>
-                  </div>
-                  <span className="text-ink-400 transition group-hover:text-ink-900">→</span>
-                </button>
+                  </button>
+                  {dayActions.canDelete(b) && (
+                    <button
+                      type="button"
+                      onClick={() => dayActions.deleteBoard(b.id)}
+                      className="btn-ghost text-xs text-accent-red"
+                    >
+                      Delete
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => dayActions.openBoard(b.id)}
+                    className="text-ink-400 transition group-hover:text-ink-900"
+                    aria-label={`Edit ${b.title}`}
+                  >
+                    Edit
+                  </button>
+                </div>
               ))}
               {selectedDay.lists.map((l) => (
-                <ListPreviewButton key={l.id} list={l} onOpen={() => setOpen({ kind: 'list', id: l.id })} />
+                <ListPreviewButton
+                  key={l.id}
+                  list={l}
+                  onOpen={() => dayActions.openList(l.id)}
+                  onDelete={dayActions.canDelete(l) ? () => dayActions.deleteList(l.id) : undefined}
+                />
               ))}
               {selectedDay.boards.length + selectedDay.lists.length === 0 && (
                 <p className="rounded-xl border border-dashed border-ink-900/20 bg-paper px-3 py-4 text-center text-sm text-ink-500">
@@ -439,6 +509,145 @@ export function CalendarDesktop({ family }: { family?: Family }) {
           </section>
         </aside>
       </div>
+      {daySheetOpen && (
+        <DaySheet
+          date={selected}
+          day={selectedDay}
+          actions={dayActions}
+          onClose={() => setDaySheetOpen(false)}
+          onNewBoard={() => createBoard.mutate(selected)}
+          onNewShoppingList={() => createList.mutate({ date: selected, kind: 'shopping' })}
+        />
+      )}
+    </div>
+  );
+}
+
+function DaySheet({
+  date,
+  day,
+  actions,
+  onClose,
+  onNewBoard,
+  onNewShoppingList,
+}: {
+  date: DateKey;
+  day: { boards: WhiteboardSummary[]; lists: ListSummary[] };
+  actions: {
+    openBoard: (id: string) => void;
+    openList: (id: string) => void;
+    deleteBoard: (id: string) => void;
+    deleteList: (id: string) => void;
+    canDelete: (item: { createdByUserId?: string | null; createdByKidId?: string | null }) => boolean;
+  };
+  onClose: () => void;
+  onNewBoard: () => void;
+  onNewShoppingList: () => void;
+}) {
+  const total = day.boards.length + day.lists.length;
+  return (
+    <div className="fixed inset-0 z-50 bg-ink-900/35 p-3 backdrop-blur-sm lg:hidden">
+      <button
+        type="button"
+        aria-label="Close day sheet"
+        className="absolute inset-0 h-full w-full cursor-default"
+        onClick={onClose}
+      />
+      <section className="safe-pb absolute inset-x-3 bottom-3 max-h-[78vh] overflow-hidden rounded-chunky bg-paper ring-2 ring-ink-900 shadow-paper-lg">
+        <header className="flex items-start justify-between gap-3 border-b border-ink-900/10 bg-cream-100 px-4 py-3">
+          <div>
+            <div className="page-tag">DAY DETAILS</div>
+            <h3 className="font-display text-xl font-extrabold tracking-tight text-ink-900">
+              {readableDate(date)}
+            </h3>
+            <p className="mt-1 text-xs text-ink-500">
+              {total === 0 ? 'No boards or lists yet.' : `${total} item${total === 1 ? '' : 's'} on this day`}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="btn-icon" aria-label="Close">
+            ×
+          </button>
+        </header>
+        <div className="max-h-[calc(78vh-92px)] overflow-y-auto p-4">
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button type="button" onClick={onNewBoard} className="btn-secondary">
+              ✏️ New board
+            </button>
+            <button type="button" onClick={onNewShoppingList} className="btn-primary">
+              🛒 New list
+            </button>
+          </div>
+          <div className="flex flex-col gap-2">
+            {day.boards.map((b) => (
+              <div key={b.id} className="rounded-xl border border-ink-900/15 bg-paper p-3">
+                <div className="mb-2 flex items-start gap-3">
+                  <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-accent-blue/15 text-xl">
+                    ✏️
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-bold text-ink-900">{b.title}</div>
+                    <div className="text-xs text-ink-500">
+                      {b.pointsCount === 0 ? 'Empty board' : `${b.pointsCount.toLocaleString()} points`}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => actions.openBoard(b.id)} className="btn-primary">
+                    Open / edit
+                  </button>
+                  {actions.canDelete(b) && (
+                    <button
+                      type="button"
+                      onClick={() => actions.deleteBoard(b.id)}
+                      className="btn-danger"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {day.lists.map((l) => (
+              <div key={l.id} className="rounded-xl border border-ink-900/15 bg-paper p-3">
+                <div className="mb-2 flex items-start gap-3">
+                  <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-xl">
+                    {l.kind === 'shopping' ? '🛒' : l.kind === 'packing' ? '🧳' : '📋'}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-bold text-ink-900">{l.title}</div>
+                    <div className="text-xs text-ink-500">
+                      {l.itemCount === 0
+                        ? 'Empty list'
+                        : `${l.checkedCount}/${l.itemCount} done${
+                            l.totalCents > 0 ? ` · ${money(l.totalCents)}` : ''
+                          }`}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={() => actions.openList(l.id)} className="btn-primary">
+                    Open / edit
+                  </button>
+                  {actions.canDelete(l) && (
+                    <button
+                      type="button"
+                      onClick={() => actions.deleteList(l.id)}
+                      className="btn-danger"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {total === 0 && (
+              <p className="rounded-xl border border-dashed border-ink-900/20 bg-cream-100 px-3 py-5 text-center text-sm text-ink-500">
+                Create a whiteboard or list and it will be pinned to this day.
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -446,21 +655,27 @@ export function CalendarDesktop({ family }: { family?: Family }) {
 function ListPreviewButton({
   list,
   onOpen,
+  onDelete,
 }: {
   list: ListSummary;
   onOpen: () => void;
+  onDelete?: () => void;
 }) {
   const glyph = list.kind === 'shopping' ? '🛒' : list.kind === 'packing' ? '🧳' : '📋';
   const allDone = list.itemCount > 0 && list.checkedCount === list.itemCount;
   return (
-    <button
-      onClick={onOpen}
+    <div
       className="group flex items-center gap-3 rounded-xl border border-ink-900/15 bg-paper p-2.5 text-left transition hover:border-ink-900 hover:shadow-paper-sm"
     >
-      <div className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-xl">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-xl"
+        aria-label={`Open ${list.title}`}
+      >
         {glyph}
-      </div>
-      <div className="min-w-0 flex-1">
+      </button>
+      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
         <div className="truncate text-sm font-bold text-ink-900">{list.title}</div>
         <div className="text-xs text-ink-500">
           {list.itemCount === 0
@@ -469,9 +684,21 @@ function ListPreviewButton({
                 list.totalCents > 0 ? ` · ${money(list.totalCents)}` : ''
               }`}
         </div>
-      </div>
+      </button>
       {allDone && <span className="pill-approved">DONE</span>}
-      <span className="text-ink-400 transition group-hover:text-ink-900">→</span>
-    </button>
+      {onDelete && (
+        <button type="button" onClick={onDelete} className="btn-ghost text-xs text-accent-red">
+          Delete
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="text-ink-400 transition group-hover:text-ink-900"
+        aria-label={`Edit ${list.title}`}
+      >
+        Edit
+      </button>
+    </div>
   );
 }

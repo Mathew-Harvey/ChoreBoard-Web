@@ -109,10 +109,10 @@ export function WhiteboardEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Canvas sizing — the underlying drawing space stays at the board's
-  // logical width × height. We CSS-scale the canvas to fit the viewport
-  // while preserving aspect ratio, then map pointer events back into logical
-  // coords on input. Backing-store DPI = devicePixelRatio for crisp lines.
+  // Canvas sizing — the persisted drawing space stays at the board's logical
+  // width × height, but the displayed canvas stretches to fill the available
+  // editor viewport. Pointer events are mapped back to logical coords with
+  // independent X/Y scale factors.
   const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 800, h: 500 });
   useLayoutEffect(() => {
     if (!wrapRef.current) return;
@@ -126,16 +126,16 @@ export function WhiteboardEditor({
   }, []);
 
   const fit = useMemo(() => {
-    if (!wb) return { scale: 1, offX: 0, offY: 0, dispW: viewport.w, dispH: viewport.h };
-    const sx = viewport.w / wb.width;
-    const sy = viewport.h / wb.height;
-    const scale = Math.min(sx, sy);
-    const dispW = wb.width * scale;
-    const dispH = wb.height * scale;
+    if (!wb) {
+      return { scaleX: 1, scaleY: 1, offX: 0, offY: 0, dispW: viewport.w, dispH: viewport.h };
+    }
+    const dispW = Math.max(1, viewport.w);
+    const dispH = Math.max(1, viewport.h);
     return {
-      scale,
-      offX: (viewport.w - dispW) / 2,
-      offY: (viewport.h - dispH) / 2,
+      scaleX: dispW / wb.width,
+      scaleY: dispH / wb.height,
+      offX: 0,
+      offY: 0,
       dispW,
       dispH,
     };
@@ -155,7 +155,7 @@ export function WhiteboardEditor({
     canvas.style.height = `${fit.dispH}px`;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.setTransform(dpr * fit.scale, 0, 0, dpr * fit.scale, 0, 0);
+    ctx.setTransform(dpr * fit.scaleX, 0, 0, dpr * fit.scaleY, 0, 0);
 
     // Background.
     paintBackground(ctx, wb.background, wb.width, wb.height);
@@ -184,8 +184,8 @@ export function WhiteboardEditor({
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / fit.scale;
-    const y = (e.clientY - rect.top) / fit.scale;
+    const x = (e.clientX - rect.left) / fit.scaleX;
+    const y = (e.clientY - rect.top) / fit.scaleY;
     return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
   };
 

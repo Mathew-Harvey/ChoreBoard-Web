@@ -192,6 +192,8 @@ export type ListSummary = {
   date: string | null;
   store: string | null;
   archivedAt: string | null;
+  createdByUserId: string | null;
+  createdByKidId: string | null;
   createdAt: string;
   updatedAt: string;
   itemCount: number;
