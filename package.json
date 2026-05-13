@@ -6,7 +6,7 @@
   "description": "ChoreBoard web client — Vite + React + TS",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/copy-spa-fallback.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "cap:sync": "npm run build && cap sync",
