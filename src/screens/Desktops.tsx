@@ -220,7 +220,7 @@ export function Desktops() {
 
       <DesktopTabs desktops={desktops} idx={idx} onPick={setIdx} />
 
-      <main id="cb-main" className="flex-1 overflow-hidden">
+      <main id="cb-main" className="min-h-0 flex-1 overflow-hidden">
         {desktop?.kind === 'kanban' && (
           <KanbanDesktop board={board.data} loading={board.isLoading} />
         )}

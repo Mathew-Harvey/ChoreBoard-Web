@@ -137,14 +137,14 @@ export function CalendarDesktop({ family }: { family?: Family }) {
   // they have the full canvas/list at their disposal.
   if (open?.kind === 'whiteboard') {
     return (
-      <div className="h-full">
+      <div className="h-full min-h-0">
         <WhiteboardEditor whiteboardId={open.id} onClose={() => setOpen(null)} />
       </div>
     );
   }
   if (open?.kind === 'list') {
     return (
-      <div className="h-full">
+      <div className="h-full min-h-0">
         <ListEditor
           listId={open.id}
           onClose={() => setOpen(null)}

@@ -285,8 +285,8 @@ export function WhiteboardEditor({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-ink-900/15 bg-cream-100/70 px-3 py-2 sm:gap-3 sm:px-5">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-ink-900/15 bg-cream-100/70 px-3 py-2 sm:gap-3 sm:px-5">
         <button onClick={onClose} className="btn-ghost" aria-label="Back to calendar">
           ← Back
         </button>
@@ -360,7 +360,7 @@ export function WhiteboardEditor({
       <div
         ref={wrapRef}
         data-no-swipe="1"
-        className="relative flex-1 overflow-hidden bg-cream-100"
+        className="relative min-h-[360px] flex-1 overflow-hidden bg-cream-100"
         // Disable pinch-zoom + double-tap-zoom inside the drawing area —
         // touch input belongs to the brush, not the browser. `data-no-swipe`
         // also keeps the desktop-paging touch handler in Desktops.tsx from
@@ -391,6 +391,8 @@ export function WhiteboardEditor({
             position: 'absolute',
             left: fit.offX,
             top: fit.offY,
+            display: 'block',
+            zIndex: 1,
             cursor: tool === 'eraser' ? 'cell' : 'crosshair',
             touchAction: 'none',
           }}
