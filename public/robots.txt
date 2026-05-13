@@ -1,0 +1,57 @@
+# ChoreBoard — web app (https://app.choreboard.io)
+# This is a client-rendered SPA behind sign-in. There's nothing useful for
+# general search engines to index, but social-preview crawlers MUST be
+# allowed so links to https://app.choreboard.io unfurl correctly.
+
+User-agent: *
+Allow: /
+
+# Social-preview crawlers (link unfurlers). Named explicitly so they're
+# never accidentally blocked.
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: Facebot
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: Twitterbot
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Slackbot
+Allow: /
+
+User-agent: Slackbot-LinkExpanding
+Allow: /
+
+User-agent: Discordbot
+Allow: /
+
+User-agent: TelegramBot
+Allow: /
+
+User-agent: WhatsApp
+Allow: /
+
+User-agent: Applebot
+Allow: /
+
+User-agent: Pinterest
+Allow: /
+
+User-agent: redditbot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: DuckDuckBot
+Allow: /
