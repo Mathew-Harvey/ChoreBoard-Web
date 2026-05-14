@@ -1857,7 +1857,7 @@ function BigStat({
   big?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-4 rounded-3xl bg-cream-50/8 p-6 ring-1 ring-cream-50/15 backdrop-blur lg:p-8 2xl:p-10">
+    <div className="flex min-w-0 flex-col gap-4 overflow-hidden rounded-3xl bg-cream-50/8 p-6 ring-1 ring-cream-50/15 backdrop-blur lg:p-8 2xl:p-10">
       <div className="text-[10px] font-bold uppercase tracking-[0.28em] text-cream-50/55 sm:text-xs lg:text-sm">
         {label}
       </div>
@@ -1865,8 +1865,10 @@ function BigStat({
         value={value}
         format={format ?? ((n) => Math.round(n).toLocaleString())}
         duration={900}
-        className={`block font-display font-extrabold tabular-nums tracking-tight ${
-          big ? 'text-fluid-ambient' : 'text-5xl sm:text-6xl lg:text-7xl 2xl:text-8xl'
+        className={`block max-w-full whitespace-nowrap font-display font-extrabold leading-none tracking-tight tabular-nums ${
+          big
+            ? 'text-[clamp(4.5rem,7.5vw,8rem)]'
+            : 'text-5xl sm:text-6xl lg:text-7xl 2xl:text-8xl'
         }`}
       />
       <div className="h-1.5 rounded-full" style={{ backgroundColor: accent, opacity: 0.6 }} />
