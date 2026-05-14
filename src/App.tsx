@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from './lib/session';
 import { useFamilyEvents } from './lib/useFamilyEvents';
 import { useNativePush } from './lib/nativePush';
@@ -12,6 +12,7 @@ import { AdminFamily } from './screens/admin/AdminFamily';
 import { AdminLedger } from './screens/admin/AdminLedger';
 import { AdminMilestones } from './screens/admin/AdminMilestones';
 import { AdminBilling } from './screens/admin/AdminBilling';
+import { AdminDashPage } from './screens/AdminDashPage';
 import { PrivacyPolicy } from './screens/legal/PrivacyPolicy';
 import { TermsOfService } from './screens/legal/TermsOfService';
 
@@ -20,8 +21,19 @@ export function App() {
   const signedIn = !!session.data;
   const isParent = session.data?.kind === 'parent';
   const navigate = useNavigate();
-  useFamilyEvents(signedIn);
-  useNativePush({ enabled: signedIn, isParent, navigate });
+  const location = useLocation();
+  // /admin/dash is a whitelisted-only usage dashboard that renders its own
+  // auth states (loading / sign-in / denied / dashboard). It must work
+  // whether or not there's a session, so it bypasses the normal auth gate
+  // below — and it must NOT subscribe to family events / native push, both
+  // of which assume a parent principal scoped to a real family.
+  const onAdminDash = location.pathname === '/admin/dash';
+  useFamilyEvents(signedIn && !onAdminDash);
+  useNativePush({ enabled: signedIn && !onAdminDash, isParent, navigate });
+
+  if (onAdminDash) {
+    return <AdminDashPage />;
+  }
 
   if (session.isLoading) {
     return (
