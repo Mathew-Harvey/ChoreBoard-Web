@@ -113,22 +113,39 @@ export function WhiteboardEditor({
   // width × height, but the displayed canvas stretches to fill the available
   // editor viewport. Pointer events are mapped back to logical coords with
   // independent X/Y scale factors.
+  //
+  // Why we don't just trust the wrapper's own height:
+  //   The page chrome above us (`Desktops.tsx`) uses `min-h-screen` rather
+  //   than `h-screen`, so the `h-full` chain that should hand `<main>`'s
+  //   pixel height down to this wrapper sometimes collapses — leaving the
+  //   `flex-1` wrapper stuck at its `min-h-[360px]` minimum. We instead
+  //   compute the available height from `window.innerHeight - rect.top` and
+  //   pin the wrapper to that value with an inline style, which is immune to
+  //   whatever the surrounding flex layout decides.
   const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 800, h: 500 });
-  // Depend on `wb?.id` so the observer is (re-)attached the moment the editor
-  // markup actually mounts. The first render returns a "Loading…" placeholder
-  // that doesn't include `wrapRef`, so an empty-deps effect would silently
-  // miss the real wrapper and leave the canvas stuck at its 800×500 default.
   useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const measure = () => {
       const rect = el.getBoundingClientRect();
-      setViewport({ w: rect.width, h: rect.height });
+      const winH = window.visualViewport?.height ?? window.innerHeight;
+      // Tiny bottom gutter so the board's drop-shadow isn't sliced flush
+      // against the viewport edge.
+      const availH = Math.max(360, Math.floor(winH - rect.top - 8));
+      const w = Math.max(320, Math.floor(rect.width));
+      setViewport({ w, h: availH });
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    const onWinResize = () => measure();
+    window.addEventListener('resize', onWinResize);
+    window.visualViewport?.addEventListener('resize', onWinResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onWinResize);
+      window.visualViewport?.removeEventListener('resize', onWinResize);
+    };
   }, [wb?.id]);
 
   const fit = useMemo(() => {
@@ -371,7 +388,10 @@ export function WhiteboardEditor({
         // touch input belongs to the brush, not the browser. `data-no-swipe`
         // also keeps the desktop-paging touch handler in Desktops.tsx from
         // hijacking horizontal brush motion as a "swipe to next desktop".
-        style={{ touchAction: 'none' }}
+        // Inline `height` overrides the `flex-1` so the wrapper actually
+        // takes the measured viewport space even when the parent flex chain
+        // refuses to give it more (see comment on the measurement effect).
+        style={{ touchAction: 'none', height: viewport.h }}
       >
         <div
           className="absolute"
