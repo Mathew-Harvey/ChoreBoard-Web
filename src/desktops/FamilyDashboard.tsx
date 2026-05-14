@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
-import { api } from '../lib/api';
-import type { BoardResponse, LeaderboardResponse } from '../lib/types';
-import { money, timeUntil } from '../lib/format';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, ApiError } from '../lib/api';
+import type {
+  BoardResponse,
+  LeaderboardResponse,
+  Milestone,
+  MilestoneMetric,
+} from '../lib/types';
+import { money, relativePast, timeUntil } from '../lib/format';
 import {
   DesktopTitle,
   MemberAvatar,
@@ -14,6 +19,8 @@ import { AnimatedNumber } from '../ui/AnimatedNumber';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonDesktop, SkeletonStatRow } from '../ui/Skeleton';
 import { StreakChip } from '../ui/StreakChip';
+import { useSession } from '../lib/session';
+import { toastError, toastSuccess } from '../ui/Toast';
 import {
   useFamilyMemberStats,
   rollupByKey,
@@ -42,6 +49,13 @@ export function FamilyDashboard({
     queryFn: () =>
       api.get<{ lifetimeCents: number; lifetimeChores: number }>('/api/stats/family'),
     refetchInterval: 5 * 60_000,
+  });
+
+  const milestonesQ = useQuery({
+    queryKey: ['milestones'],
+    queryFn: () =>
+      api.get<{ milestones: Milestone[] }>('/api/milestones').then((r) => r.milestones),
+    refetchInterval: 60_000,
   });
 
   // Aggregated "top streak", "most recent level up", and "latest badge" across
@@ -132,6 +146,13 @@ export function FamilyDashboard({
           </div>
           <MoneyJar amountCents={total} />
         </section>
+
+        <MilestonesSection
+          milestones={(milestonesQ.data ?? []).filter(
+            (m) => m.scope === 'family' && (m.active || m.unclaimedHitCount > 0),
+          )}
+          board={board}
+        />
 
         {/* Leaderboard + side tiles */}
         <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr] 2xl:gap-6">
@@ -476,6 +497,168 @@ function FamilyStat({ label, value }: { label: string; value: string }) {
       </span>
     </div>
   );
+}
+
+function MilestonesSection({
+  milestones,
+  board,
+}: {
+  milestones: Milestone[];
+  board?: BoardResponse;
+}) {
+  const session = useSession();
+  const isParent = session.data?.kind === 'parent';
+  const qc = useQueryClient();
+
+  const claim = useMutation({
+    mutationFn: ({ hitId, claimed }: { hitId: string; claimed: boolean }) =>
+      api.post(`/api/milestones/hits/${hitId}/${claimed ? 'unclaim' : 'claim'}`),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['milestones'] });
+      toastSuccess(vars.claimed ? 'Marked outstanding' : 'Reward delivered ✨');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t update', err.message);
+    },
+  });
+
+  if (!board) return null;
+  if (milestones.length === 0) {
+    if (!isParent) return null;
+    return (
+      <section className="card flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="min-w-0">
+          <div className="page-tag mb-1">FAMILY REWARDS</div>
+          <h2 className="font-display text-xl font-extrabold tracking-tight sm:text-2xl">
+            No milestones yet
+          </h2>
+          <p className="mt-1 text-sm text-ink-500 sm:text-base">
+            Set a target like “$50 this week → pizza night out” and the kids
+            will see the bar fill up live.
+          </p>
+        </div>
+        <Link to="/admin/milestones" className="btn-primary self-start sm:self-auto">
+          + Set a milestone
+        </Link>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card p-5 sm:p-6 2xl:p-8">
+      <header className="mb-4 flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-baseline">
+        <div>
+          <div className="page-tag mb-1">FAMILY REWARDS</div>
+          <h2 className="font-display text-xl font-extrabold tracking-tight sm:text-2xl 2xl:text-3xl">
+            Milestones
+          </h2>
+        </div>
+        {isParent && (
+          <Link
+            to="/admin/milestones"
+            className="btn-secondary self-stretch sm:self-auto"
+          >
+            Manage
+          </Link>
+        )}
+      </header>
+      <ul className="grid gap-3 lg:grid-cols-2">
+        {milestones.map((m) => (
+          <FamilyMilestoneCard
+            key={m.id}
+            milestone={m}
+            isParent={isParent}
+            onClaim={(hitId, claimed) =>
+              claim.mutate({ hitId, claimed })
+            }
+            isClaiming={claim.isPending}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function FamilyMilestoneCard({
+  milestone,
+  isParent,
+  onClaim,
+  isClaiming,
+}: {
+  milestone: Milestone;
+  isParent: boolean;
+  onClaim: (hitId: string, claimed: boolean) => void;
+  isClaiming: boolean;
+}) {
+  const accent = milestone.hitThisPeriod ? '#0F6E37' : '#3253D7';
+  return (
+    <li className="rounded-xl bg-cream-50 p-4 ring-2 ring-ink-900 sm:p-5">
+      <div className="flex items-start gap-3">
+        <div
+          className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-xl text-2xl ring-2 ring-ink-900"
+          style={{ backgroundColor: hexAlpha(accent, 0.18) }}
+          aria-hidden
+        >
+          {milestone.icon ?? '🎁'}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-display truncate text-base font-extrabold sm:text-lg">
+              {milestone.name}
+            </h3>
+            <span className="text-xs tabular-nums text-ink-500 sm:text-sm">
+              {formatMilestoneMetric(milestone.metric, milestone.progress)} /{' '}
+              <span className="text-ink-700">
+                {formatMilestoneMetric(milestone.metric, milestone.targetValue)}
+              </span>
+            </span>
+          </div>
+          <p className="mt-0.5 truncate text-xs text-ink-500 sm:text-sm">
+            🎉 {milestone.reward}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3">
+        <ProgressBar
+          percent={milestone.percent}
+          color={accent}
+          height="md"
+        />
+      </div>
+      {milestone.hitThisPeriod && milestone.currentHit && (
+        <div className="mt-3 flex flex-col gap-2 rounded-lg bg-money/15 p-2.5 ring-2 ring-money/40 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm font-bold text-money">
+            🏆 Reward unlocked
+            <span className="ml-1 font-normal text-ink-700">
+              · hit {relativePast(milestone.currentHit.hitAt)}
+            </span>
+          </div>
+          {isParent ? (
+            <button
+              className={
+                milestone.currentHit.claimedAt ? 'btn-secondary' : 'btn-money'
+              }
+              disabled={isClaiming}
+              onClick={() =>
+                onClaim(milestone.currentHit!.id, !!milestone.currentHit!.claimedAt)
+              }
+            >
+              {milestone.currentHit.claimedAt ? '✓ Delivered' : 'Mark delivered'}
+            </button>
+          ) : (
+            <span className="pill bg-ink-900 text-cream-50">
+              {milestone.currentHit.claimedAt ? '✓ delivered' : 'Ask a parent ✨'}
+            </span>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function formatMilestoneMetric(metric: MilestoneMetric, value: number): string {
+  if (metric === 'cents_earned') return money(value);
+  return `${value} ${value === 1 ? 'chore' : 'chores'}`;
 }
 
 function hexAlpha(hex: string, alpha: number): string {

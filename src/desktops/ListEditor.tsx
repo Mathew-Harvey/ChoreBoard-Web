@@ -3,7 +3,55 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
 import type { ListDetail, ListItem, ListKind, ProductCard } from '../lib/types';
-import { toastError, toastSuccess } from '../ui/Toast';
+import { toastError, toastInfo, toastSuccess } from '../ui/Toast';
+
+const WOOLWORTHS_SHOP_URL = 'https://www.woolworths.com.au/shop';
+
+function buildWoolworthsSearchUrl(text: string): string {
+  return `${WOOLWORTHS_SHOP_URL}/search/products?searchTerm=${encodeURIComponent(text.trim())}`;
+}
+
+/**
+ * Map a list item to the best Woolworths URL we can produce: the cached
+ * product-detail page when available, otherwise a search for its free-text
+ * label so the user still ends up on Woolworths instead of nowhere.
+ */
+function urlForListItem(item: ListItem): string {
+  return item.productJson?.productUrl ?? buildWoolworthsSearchUrl(item.text);
+}
+
+/**
+ * Open every unchecked line on woolworths.com.au. Browsers allow many
+ * window.open() calls inside a single user gesture; the few that get
+ * blocked (Safari with strict popup settings, mostly) still leave the
+ * user on the first tab with the per-item links inside our editor as
+ * the secondary path.
+ */
+function buyListOnWoolworths(items: ListItem[]): void {
+  const open = items.filter((it) => !it.checkedAt);
+  if (open.length === 0) {
+    toastInfo('Nothing to buy', 'All items are already checked off.');
+    return;
+  }
+  let opened = 0;
+  for (const it of open) {
+    const w = window.open(urlForListItem(it), '_blank', 'noopener,noreferrer');
+    if (w) opened += 1;
+  }
+  if (opened === 0) {
+    toastError(
+      'Popup blocked',
+      'Allow popups for ChoreBoard, or tap each line individually to open it on Woolworths.',
+    );
+    return;
+  }
+  if (opened < open.length) {
+    toastInfo(
+      `Opened ${opened} of ${open.length} items`,
+      'Your browser blocked the rest. Tap each remaining line to open it.',
+    );
+  }
+}
 
 /**
  * ListEditor — open a single list, manage its items.
@@ -197,6 +245,17 @@ export function ListEditor({
           {checkedCount}/{items.length} done
           {totalCents > 0 && ` · ${money(totalCents)}`}
         </span>
+        {isShopping && items.length > 0 && (
+          <button
+            type="button"
+            onClick={() => buyListOnWoolworths(items)}
+            className="btn-primary"
+            title="Open each unchecked item on woolworths.com.au"
+          >
+            Buy on Woolworths
+            <span aria-hidden className="ml-1">↗</span>
+          </button>
+        )}
         {checkedCount > 0 && (
           <button
             type="button"
@@ -433,14 +492,30 @@ function ListItemRow({
           )}
         </div>
       </div>
-      <button
-        type="button"
-        aria-label="Remove item"
-        onClick={onRemove}
-        className="self-center text-ink-400 transition hover:text-accent-red"
-      >
-        ×
-      </button>
+      <div className="flex flex-col items-center justify-between gap-1 self-stretch">
+        {item.productJson?.productUrl ? (
+          <a
+            href={item.productJson.productUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`View ${item.productJson.name} on Woolworths`}
+            title="View on Woolworths"
+            className="text-ink-400 transition hover:text-accent-blue"
+          >
+            <span aria-hidden>↗</span>
+          </a>
+        ) : (
+          <span className="h-4" aria-hidden />
+        )}
+        <button
+          type="button"
+          aria-label="Remove item"
+          onClick={onRemove}
+          className="text-ink-400 transition hover:text-accent-red"
+        >
+          ×
+        </button>
+      </div>
     </li>
   );
 }

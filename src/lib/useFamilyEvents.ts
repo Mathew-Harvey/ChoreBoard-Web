@@ -85,6 +85,25 @@ export function useFamilyEvents(enabled: boolean): void {
         inv(['lists']);
         if (data?.listId) qc.invalidateQueries({ queryKey: ['list', data.listId] });
       },
+      'milestone.hit': (data) => {
+        inv(['milestones']);
+        // Re-broadcast for the celebrate-on-hit toast banner; the listener
+        // lives in <MilestoneCelebrator /> on Desktops.tsx so it can render
+        // confetti regardless of which desktop is currently visible.
+        window.dispatchEvent(
+          new CustomEvent('cb:milestone.hit', {
+            detail: {
+              milestoneId: data?.milestoneId ?? null,
+              hitId: data?.hitId ?? null,
+              scope: data?.scope ?? null,
+              memberType: data?.memberType ?? null,
+              memberId: data?.memberId ?? null,
+            },
+          }),
+        );
+      },
+      'milestone.updated': () => inv(['milestones']),
+      'milestone.claimed': () => inv(['milestones']),
       'week.closed': (data) => {
         inv(
           ['board'],

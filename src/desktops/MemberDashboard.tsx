@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
-import type { BoardResponse, Goal, MemberStats } from '../lib/types';
+import type {
+  BoardResponse,
+  Goal,
+  MemberStats,
+  Milestone,
+  MilestoneMetric,
+} from '../lib/types';
 import { money, relativePast } from '../lib/format';
 import { useSession } from '../lib/session';
 import {
@@ -49,6 +56,25 @@ export function MemberDashboard({
     refetchInterval: 60_000,
   });
 
+  const milestonesQ = useQuery({
+    queryKey: ['milestones'],
+    queryFn: () =>
+      api.get<{ milestones: Milestone[] }>('/api/milestones').then((r) => r.milestones),
+    refetchInterval: 60_000,
+  });
+
+  const claim = useMutation({
+    mutationFn: ({ hitId, claimed }: { hitId: string; claimed: boolean }) =>
+      api.post(`/api/milestones/hits/${hitId}/${claimed ? 'unclaim' : 'claim'}`),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['milestones'] });
+      toastSuccess(vars.claimed ? 'Marked outstanding' : 'Reward delivered ✨');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t update', err.message);
+    },
+  });
+
   const action = useMutation({
     mutationFn: async (input: { instanceId: string; action: 'approve' | 'reject' }) =>
       api.post(`/api/board/instances/${input.instanceId}/${input.action}`),
@@ -83,6 +109,18 @@ export function MemberDashboard({
         (g) => g.memberType === member.type && g.memberId === member.id,
       ),
     [goalsQ.data, member.id, member.type],
+  );
+
+  const myMilestones = useMemo(
+    () =>
+      (milestonesQ.data ?? []).filter(
+        (m) =>
+          m.scope === 'member' &&
+          m.memberType === member.type &&
+          m.memberId === member.id &&
+          (m.active || m.unclaimedHitCount > 0),
+      ),
+    [milestonesQ.data, member.id, member.type],
   );
 
   const stats = statsQ.data?.stats;
@@ -214,6 +252,16 @@ export function MemberDashboard({
         )}
         {myGoals.length === 1 && canEditGoals && (
           <GoalCreatePrompt member={member} accent={accent} compact />
+        )}
+
+        {myMilestones.length > 0 && (
+          <MemberMilestonesSection
+            milestones={myMilestones}
+            accent={accent}
+            isParent={isParent}
+            isClaiming={claim.isPending}
+            onClaim={(hitId, claimed) => claim.mutate({ hitId, claimed })}
+          />
         )}
 
         {/* Four small stat tiles */}
@@ -524,6 +572,108 @@ function NewGoalForm({ member, onDone }: { member: Member; onDone: () => void })
       </button>
     </form>
   );
+}
+
+function MemberMilestonesSection({
+  milestones,
+  accent,
+  isParent,
+  isClaiming,
+  onClaim,
+}: {
+  milestones: Milestone[];
+  accent: string;
+  isParent: boolean;
+  isClaiming: boolean;
+  onClaim: (hitId: string, claimed: boolean) => void;
+}) {
+  return (
+    <section className="card p-5 sm:p-6 2xl:p-7">
+      <header className="mb-3 flex items-baseline justify-between">
+        <h3 className="font-display text-lg font-extrabold sm:text-xl">
+          Personal milestones
+        </h3>
+        {isParent && (
+          <Link
+            to="/admin/milestones"
+            className="text-xs font-semibold text-ink-500 hover:text-ink-900 hover:underline"
+          >
+            Manage →
+          </Link>
+        )}
+      </header>
+      <ul className="grid gap-3 lg:grid-cols-2">
+        {milestones.map((m) => (
+          <li
+            key={m.id}
+            className="rounded-xl bg-cream-50 p-4 ring-2 ring-ink-900"
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-xl text-2xl ring-2 ring-ink-900"
+                style={{ backgroundColor: hexAlpha(m.hitThisPeriod ? '#0F6E37' : accent, 0.18) }}
+                aria-hidden
+              >
+                {m.icon ?? '🎁'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h4 className="truncate font-display text-base font-extrabold">
+                    {m.name}
+                  </h4>
+                  <span className="text-xs tabular-nums text-ink-500">
+                    {formatMemberMetric(m.metric, m.progress)} /{' '}
+                    <span className="text-ink-700">
+                      {formatMemberMetric(m.metric, m.targetValue)}
+                    </span>
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-xs text-ink-500">
+                  🎉 {m.reward}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <ProgressBar
+                percent={m.percent}
+                color={m.hitThisPeriod ? '#0F6E37' : accent}
+                height="md"
+              />
+            </div>
+            {m.hitThisPeriod && m.currentHit && (
+              <div className="mt-3 flex flex-col gap-2 rounded-lg bg-money/15 p-2.5 ring-2 ring-money/40 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm font-bold text-money">
+                  🏆 Reward unlocked
+                </div>
+                {isParent ? (
+                  <button
+                    className={
+                      m.currentHit.claimedAt ? 'btn-secondary' : 'btn-money'
+                    }
+                    disabled={isClaiming}
+                    onClick={() =>
+                      onClaim(m.currentHit!.id, !!m.currentHit!.claimedAt)
+                    }
+                  >
+                    {m.currentHit.claimedAt ? '✓ Delivered' : 'Mark delivered'}
+                  </button>
+                ) : (
+                  <span className="pill bg-ink-900 text-cream-50">
+                    {m.currentHit.claimedAt ? '✓ delivered' : 'Ask a parent ✨'}
+                  </span>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function formatMemberMetric(metric: MilestoneMetric, value: number): string {
+  if (metric === 'cents_earned') return money(value);
+  return `${value} ${value === 1 ? 'chore' : 'chores'}`;
 }
 
 function SmallTile({ label, big, sub }: { label: string; big: string; sub?: string }) {

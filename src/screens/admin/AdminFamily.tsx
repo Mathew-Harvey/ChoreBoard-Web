@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
 import { useSession } from '../../lib/session';
-import type { Family, Kid, Parent } from '../../lib/types';
+import type { Family, FamilyInvite, Kid, Parent } from '../../lib/types';
 import { MemberAvatar } from '../../ui/primitives';
 import { toastError, toastSuccess } from '../../ui/Toast';
 
@@ -68,6 +68,43 @@ export function AdminFamily() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['family'] });
       toastSuccess('Kid removed');
+    },
+  });
+  const invite = useQuery({
+    queryKey: ['family-invite'],
+    queryFn: () =>
+      api.get<{ invite: FamilyInvite | null }>('/api/family/invites'),
+  });
+  const createInvite = useMutation({
+    mutationFn: () => api.post<{ invite: FamilyInvite }>('/api/family/invites'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family-invite'] });
+      toastSuccess('Invite link ready', 'Share it with your co-parent.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t create invite', err.message);
+    },
+  });
+  const revokeInvite = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/family/invites/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family-invite'] });
+      toastSuccess('Invite revoked');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t revoke invite', err.message);
+    },
+  });
+  const removeParent = useMutation({
+    mutationFn: (userId: string) => api.delete(`/api/family/parents/${userId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family'] });
+      toastSuccess('Co-parent removed');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        toastError('Couldn’t remove co-parent', err.message);
+      }
     },
   });
   const delMe = useMutation({
@@ -316,22 +353,62 @@ export function AdminFamily() {
       </section>
 
       <section className="card p-5 sm:p-6">
-        <h2 className="mb-4 font-display text-xl font-extrabold sm:text-2xl">Parents</h2>
-        <ul className="flex flex-col gap-2">
-          {fam.data.parents.map((u) => (
-            <li
-              key={u.id}
-              className="flex items-center gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900"
-            >
-              <MemberAvatar name={u.name} color="#3253D7" size="md" />
-              <span className="truncate font-semibold">{u.name}</span>
-              <span className="pill ml-auto">{u.role}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-xs text-ink-500">
-          Inviting additional parents is a v1.1 feature.
+        <h2 className="mb-1 font-display text-xl font-extrabold sm:text-2xl">Parents</h2>
+        <p className="mb-4 text-sm text-ink-500">
+          Co-parents share full access to chores, kids, and the ledger. Only the
+          owner can manage billing or delete the family.
         </p>
+        <ul className="flex flex-col gap-2">
+          {fam.data.parents.map((u) => {
+            const isSelf = session.data?.kind === 'parent' && session.data.userId === u.id;
+            const canRemove =
+              session.data?.kind === 'parent' &&
+              session.data.role === 'owner' &&
+              u.role !== 'owner' &&
+              !isSelf;
+            return (
+              <li
+                key={u.id}
+                className="flex flex-wrap items-center gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900"
+              >
+                <MemberAvatar name={u.name} color="#3253D7" size="md" />
+                <span className="truncate font-semibold">
+                  {u.name}
+                  {isSelf && <span className="ml-1 text-ink-500">(you)</span>}
+                </span>
+                <span className="pill ml-auto capitalize">{u.role}</span>
+                {canRemove && (
+                  <button
+                    className="btn-danger w-full sm:w-auto"
+                    disabled={removeParent.isPending}
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Remove ${u.name} from the family? They’ll be signed out immediately and lose access.`,
+                        )
+                      ) {
+                        removeParent.mutate(u.id);
+                      }
+                    }}
+                  >
+                    Remove
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+
+        {session.data?.kind === 'parent' && session.data.role === 'owner' && (
+          <CoParentInviter
+            invite={invite.data?.invite ?? null}
+            isLoading={invite.isLoading}
+            onCreate={() => createInvite.mutate()}
+            onRevoke={(id) => revokeInvite.mutate(id)}
+            isCreating={createInvite.isPending}
+            isRevoking={revokeInvite.isPending}
+          />
+        )}
       </section>
 
       {session.data?.kind === 'parent' && (
@@ -457,5 +534,104 @@ function Field({
       <span className="font-semibold text-ink-900">{label}</span>
       {children}
     </label>
+  );
+}
+
+function CoParentInviter({
+  invite,
+  isLoading,
+  onCreate,
+  onRevoke,
+  isCreating,
+  isRevoking,
+}: {
+  invite: FamilyInvite | null;
+  isLoading: boolean;
+  onCreate: () => void;
+  onRevoke: (id: string) => void;
+  isCreating: boolean;
+  isRevoking: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  if (isLoading) {
+    return <p className="mt-4 text-sm text-ink-500">Loading invite…</p>;
+  }
+
+  return (
+    <div className="mt-6 rounded-xl bg-cream-50 p-4 ring-2 ring-ink-900 sm:p-5">
+      <h3 className="font-display text-base font-extrabold sm:text-lg">
+        Invite a co-parent
+      </h3>
+      <p className="mt-1 text-sm text-ink-500">
+        Generate a single-use join link and share it with your partner over
+        text or chat. Anyone with the link can claim a parent seat, so don’t
+        post it publicly.
+      </p>
+
+      {invite ? (
+        <div className="mt-4 flex flex-col gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              readOnly
+              className="input grow font-mono text-xs"
+              value={invite.url}
+              onFocus={(e) => e.currentTarget.select()}
+              aria-label="Co-parent invite URL"
+            />
+            <button
+              className="btn-secondary sm:w-auto"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(invite.url);
+                  setCopied(true);
+                  toastSuccess('Invite link copied');
+                  setTimeout(() => setCopied(false), 2000);
+                } catch {
+                  toastError(
+                    'Couldn’t copy',
+                    'Long-press the URL above to copy it manually.',
+                  );
+                }
+              }}
+            >
+              {copied ? 'Copied!' : 'Copy link'}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
+            <span>
+              Expires{' '}
+              {new Date(invite.expiresAt).toLocaleString(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })}
+            </span>
+            <button
+              className="btn-ghost"
+              disabled={isRevoking}
+              onClick={() => {
+                if (
+                  confirm(
+                    'Revoke this invite? The current link will stop working immediately.',
+                  )
+                ) {
+                  onRevoke(invite.id);
+                }
+              }}
+            >
+              {isRevoking ? 'Revoking…' : 'Revoke link'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="btn-primary mt-4 w-full sm:w-auto"
+          disabled={isCreating}
+          onClick={onCreate}
+        >
+          {isCreating ? 'Generating…' : 'Create invite link'}
+        </button>
+      )}
+    </div>
   );
 }

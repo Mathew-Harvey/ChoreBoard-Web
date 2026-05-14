@@ -41,6 +41,24 @@ export type Family = {
 export type Kid = { id: string; name: string; color: string; avatar?: string | null };
 export type Parent = { id: string; name: string; role: Role; avatar?: string | null };
 
+export type FamilyInvite = {
+  id: string;
+  token: string;
+  url: string;
+  expiresAt: string;
+  createdAt: string;
+  createdByUserId: string | null;
+};
+
+// Public projection returned by GET /api/auth/invites/:token — used by the
+// join screen to render context before the new parent commits to creating
+// an account. Does not leak family/kid contents.
+export type PublicInvite = {
+  familyName: string;
+  invitedByName: string | null;
+  expiresAt: string;
+};
+
 export type Cadence =
   | { kind: 'daily'; times: string[] }
   | { kind: 'weekly'; days: number[]; time: string }
@@ -182,6 +200,7 @@ export type ProductCard = {
   priceCents: number | null;
   wasPriceCents: number | null;
   onSpecial: boolean;
+  productUrl: string | null;
 };
 
 export type ListSummary = {
@@ -220,6 +239,52 @@ export type ListItem = {
 export type ListDetail = {
   list: Omit<ListSummary, 'itemCount' | 'checkedCount' | 'totalCents'>;
   items: ListItem[];
+};
+
+// Milestones & rewards ----------------------------------------------------
+
+export type MilestoneScope = 'family' | 'member';
+export type MilestoneMetric = 'cents_earned' | 'chores_completed';
+export type MilestonePeriod = 'week' | 'month' | 'lifetime';
+
+export type MilestoneHit = {
+  id: string;
+  familyId: string;
+  milestoneId: string;
+  periodStart: string;
+  hitAt: string;
+  amount: number;
+  claimedAt: string | null;
+  claimedByUserId: string | null;
+  claimNote: string | null;
+};
+
+export type Milestone = {
+  id: string;
+  familyId: string;
+  name: string;
+  reward: string;
+  icon: string | null;
+  scope: MilestoneScope;
+  memberType: MemberType | null;
+  memberId: string | null;
+  metric: MilestoneMetric;
+  period: MilestonePeriod;
+  targetValue: number;
+  repeats: boolean;
+  active: boolean;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+  // Computed fields from GET /milestones:
+  periodStart: string;
+  progress: number;
+  percent: number;
+  hitThisPeriod: boolean;
+  currentHit: MilestoneHit | null;
+  recentHits: MilestoneHit[];
+  unclaimedHitCount: number;
 };
 
 export type LedgerEntry = {

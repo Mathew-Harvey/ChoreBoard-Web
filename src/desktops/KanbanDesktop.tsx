@@ -366,6 +366,7 @@ export function KanbanDesktop({
                 roster={roster}
                 onSetStatus={onSetStatus}
                 onSubmit={(id) => action.mutate({ instanceId: id, action: 'submit' })}
+                onUnclaim={(id) => action.mutate({ instanceId: id, action: 'unclaim' })}
                 memberLookup={memberStatsLookup}
               />
             ))}
@@ -643,6 +644,7 @@ function MemberColumn({
   roster,
   onSetStatus,
   onSubmit,
+  onUnclaim,
   memberLookup,
 }: {
   column: Extract<Column, { kind: 'member' }>;
@@ -653,6 +655,7 @@ function MemberColumn({
   roster: RosterMember[];
   onSetStatus: SetStatusFn;
   onSubmit: (id: string) => void;
+  onUnclaim: (id: string) => void;
   memberLookup: ReturnType<typeof rollupByKey>;
 }) {
   const rollup = memberLookup.get(column.memberType, column.memberId);
@@ -725,6 +728,8 @@ function MemberColumn({
               onSetStatus={onSetStatus}
               canSubmit={canSubmit(inst, isParent, me)}
               onSubmit={onSubmit}
+              canUnclaim={canUnclaim(inst, isParent, me)}
+              onUnclaim={onUnclaim}
             />
           ))
         )}
@@ -936,6 +941,8 @@ function DraggableCard({
   onSetStatus,
   canSubmit,
   onSubmit,
+  canUnclaim,
+  onUnclaim,
 }: {
   instance: BoardInstance;
   draggable: boolean;
@@ -950,6 +957,8 @@ function DraggableCard({
   onSetStatus?: SetStatusFn;
   canSubmit?: boolean;
   onSubmit?: (id: string) => void;
+  canUnclaim?: boolean;
+  onUnclaim?: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: instance.id,
@@ -988,6 +997,8 @@ function DraggableCard({
         onSetStatus={onSetStatus}
         canSubmit={canSubmit}
         onSubmit={onSubmit}
+        canUnclaim={canUnclaim}
+        onUnclaim={onUnclaim}
       />
     </div>
   );
@@ -1008,6 +1019,8 @@ function CardShell({
   onSetStatus,
   canSubmit,
   onSubmit,
+  canUnclaim,
+  onUnclaim,
 }: {
   instance: BoardInstance;
   draggable: boolean;
@@ -1023,6 +1036,8 @@ function CardShell({
   onSetStatus?: SetStatusFn;
   canSubmit?: boolean;
   onSubmit?: (id: string) => void;
+  canUnclaim?: boolean;
+  onUnclaim?: (id: string) => void;
 }) {
   const overdue = instance.overdue;
   return (
@@ -1070,17 +1085,35 @@ function CardShell({
           <DueHint instance={instance} />
         </div>
         <EvidenceHint instance={instance} />
-        {canSubmit && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSubmit?.(instance.id);
-            }}
-            className="btn-money mt-2 w-full !py-1.5"
-          >
-            I&apos;m done
-          </button>
+        {(canSubmit || canUnclaim) && !overlay && (
+          <div className="mt-2 flex gap-2">
+            {canSubmit && (
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSubmit?.(instance.id);
+                }}
+                className="btn-money flex-1 !py-1.5"
+              >
+                I&apos;m done
+              </button>
+            )}
+            {canUnclaim && (
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUnclaim?.(instance.id);
+                }}
+                aria-label="Return to Available"
+                title="Return to Available"
+                className={`btn-secondary !py-1.5 ${canSubmit ? '' : 'flex-1'}`}
+              >
+                Return
+              </button>
+            )}
+          </div>
         )}
         {showApproveActions && (
           <div className="mt-2 flex gap-2">
@@ -1128,6 +1161,23 @@ function canSubmit(
     inst.status === 'claimed' &&
     inst.claimedByType === me.type &&
     inst.claimedById === me.id
+  );
+}
+
+// A claimed card can be sent back to Available by either:
+//   - any parent (the API allows it), or
+//   - the kid who currently claims it.
+// We deliberately do NOT expose this for `pending` cards: the parent reject
+// flow handles that, and a kid can't unclaim once they've submitted.
+function canUnclaim(
+  inst: BoardInstance,
+  isParent: boolean,
+  me: { type: 'user' | 'kid'; id: string } | null,
+): boolean {
+  if (inst.status !== 'claimed') return false;
+  if (isParent) return true;
+  return (
+    !!me && inst.claimedByType === me.type && inst.claimedById === me.id
   );
 }
 

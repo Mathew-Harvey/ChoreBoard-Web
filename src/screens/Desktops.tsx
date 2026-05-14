@@ -11,6 +11,7 @@ import { BudgetDesktop } from '../desktops/BudgetDesktop';
 import { MemberDashboard } from '../desktops/MemberDashboard';
 import { CalendarDesktop } from '../desktops/CalendarDesktop';
 import { ChampionBanner } from '../ui/ChampionBanner';
+import { MilestoneBanner } from '../ui/MilestoneBanner';
 import { MemberAvatar, PageTag, Wordmark } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
 import { TVMode } from './TVMode';
@@ -247,6 +248,7 @@ export function Desktops() {
       </main>
 
       <ChampionBanner />
+      <MilestoneBanner />
 
       <LegalFooter />
     </div>

@@ -3,12 +3,14 @@ import { useSession } from './lib/session';
 import { useFamilyEvents } from './lib/useFamilyEvents';
 import { useNativePush } from './lib/nativePush';
 import { AuthScreen } from './screens/AuthScreen';
+import { JoinFamilyScreen } from './screens/JoinFamilyScreen';
 import { KidPinScreen } from './screens/KidPinScreen';
 import { Desktops } from './screens/Desktops';
 import { AdminLayout } from './screens/admin/AdminLayout';
 import { AdminChores } from './screens/admin/AdminChores';
 import { AdminFamily } from './screens/admin/AdminFamily';
 import { AdminLedger } from './screens/admin/AdminLedger';
+import { AdminMilestones } from './screens/admin/AdminMilestones';
 import { AdminBilling } from './screens/admin/AdminBilling';
 import { PrivacyPolicy } from './screens/legal/PrivacyPolicy';
 import { TermsOfService } from './screens/legal/TermsOfService';
@@ -37,6 +39,7 @@ export function App() {
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
         <Route path="/kid" element={<KidPinScreen />} />
+        <Route path="/join/:token" element={<JoinFamilyScreen />} />
         <Route path="*" element={<AuthScreen />} />
       </Routes>
     );
@@ -52,12 +55,14 @@ export function App() {
         <Route path="/desktop/:idx" element={<Desktops />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
+        <Route path="/join/:token" element={<JoinFamilyScreen />} />
         {isParent && (
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="chores" replace />} />
             <Route path="chores" element={<AdminChores />} />
             <Route path="family" element={<AdminFamily />} />
             <Route path="ledger" element={<AdminLedger />} />
+            <Route path="milestones" element={<AdminMilestones />} />
             <Route path="billing" element={<AdminBilling />} />
           </Route>
         )}
