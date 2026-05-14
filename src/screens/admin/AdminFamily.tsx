@@ -107,6 +107,18 @@ export function AdminFamily() {
       }
     },
   });
+  const promoteParent = useMutation({
+    mutationFn: (userId: string) => api.post(`/api/family/parents/${userId}/promote`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family'] });
+      toastSuccess('Promoted to co-owner', 'They now have full admin access.');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        toastError('Couldn’t promote co-parent', err.message);
+      }
+    },
+  });
   const delMe = useMutation({
     mutationFn: () => api.delete('/api/auth/me'),
     onSuccess: () => {
@@ -355,17 +367,17 @@ export function AdminFamily() {
       <section className="card p-5 sm:p-6">
         <h2 className="mb-1 font-display text-xl font-extrabold sm:text-2xl">Parents</h2>
         <p className="mb-4 text-sm text-ink-500">
-          Co-parents share full access to chores, kids, and the ledger. Only the
-          owner can manage billing or delete the family.
+          Co-parents share full access to chores, kids, and the ledger. Promote
+          a co-parent to <strong>co-owner</strong> to grant them billing,
+          invites, and family-deletion rights too.
         </p>
         <ul className="flex flex-col gap-2">
           {fam.data.parents.map((u) => {
             const isSelf = session.data?.kind === 'parent' && session.data.userId === u.id;
-            const canRemove =
-              session.data?.kind === 'parent' &&
-              session.data.role === 'owner' &&
-              u.role !== 'owner' &&
-              !isSelf;
+            const viewerIsOwner =
+              session.data?.kind === 'parent' && session.data.role === 'owner';
+            const canPromote = viewerIsOwner && u.role !== 'owner' && !isSelf;
+            const canRemove = viewerIsOwner && u.role !== 'owner' && !isSelf;
             return (
               <li
                 key={u.id}
@@ -377,6 +389,25 @@ export function AdminFamily() {
                   {isSelf && <span className="ml-1 text-ink-500">(you)</span>}
                 </span>
                 <span className="pill ml-auto capitalize">{u.role}</span>
+                {canPromote && (
+                  <button
+                    className="btn-secondary w-full sm:w-auto"
+                    disabled={promoteParent.isPending}
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Promote ${u.name} to co-owner? They’ll get full admin access — billing, invites, removing parents, and deleting the family. There’s no demote button in v1.`,
+                        )
+                      ) {
+                        promoteParent.mutate(u.id);
+                      }
+                    }}
+                  >
+                    {promoteParent.isPending && promoteParent.variables === u.id
+                      ? 'Promoting…'
+                      : 'Promote to co-owner'}
+                  </button>
+                )}
                 {canRemove && (
                   <button
                     className="btn-danger w-full sm:w-auto"
