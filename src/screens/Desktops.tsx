@@ -538,7 +538,7 @@ function DesktopTabs({
       aria-label="Desktops"
     >
       <div className="mx-auto max-w-[1800px] px-2 sm:px-5">
-        <div className="h-scroll-fade flex items-center gap-1.5 overflow-x-auto py-2 sm:gap-2 sm:py-2.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto py-2 sm:gap-2 sm:py-2.5">
           {desktops.map((d, i) => {
             const active = i === idx;
             const color = d.kind === 'member' ? d.color ?? undefined : undefined;

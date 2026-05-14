@@ -226,23 +226,6 @@
   .h-scroll-snap > * {
     scroll-snap-align: start;
   }
-  .h-scroll-fade {
-    -webkit-mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      black 24px,
-      black calc(100% - 24px),
-      transparent 100%
-    );
-    mask-image: linear-gradient(
-      to right,
-      transparent 0,
-      black 24px,
-      black calc(100% - 24px),
-      transparent 100%
-    );
-  }
-
   /* Drop-zone outline used by Kanban targets. */
   .drop-target {
     @apply transition;
