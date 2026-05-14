@@ -114,16 +114,22 @@ export function WhiteboardEditor({
   // editor viewport. Pointer events are mapped back to logical coords with
   // independent X/Y scale factors.
   const [viewport, setViewport] = useState<{ w: number; h: number }>({ w: 800, h: 500 });
+  // Depend on `wb?.id` so the observer is (re-)attached the moment the editor
+  // markup actually mounts. The first render returns a "Loading…" placeholder
+  // that doesn't include `wrapRef`, so an empty-deps effect would silently
+  // miss the real wrapper and leave the canvas stuck at its 800×500 default.
   useLayoutEffect(() => {
-    if (!wrapRef.current) return;
     const el = wrapRef.current;
-    const ro = new ResizeObserver(() => {
+    if (!el) return;
+    const measure = () => {
       const rect = el.getBoundingClientRect();
       setViewport({ w: rect.width, h: rect.height });
-    });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [wb?.id]);
 
   const fit = useMemo(() => {
     if (!wb) {
