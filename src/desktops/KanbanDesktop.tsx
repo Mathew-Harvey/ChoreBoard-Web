@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -15,7 +15,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
 import { useSession } from '../lib/session';
-import { money, timeUntil } from '../lib/format';
+import { money, relativePast, timeUntil } from '../lib/format';
 import type {
   BoardInstance,
   BoardResponse,
@@ -210,7 +210,7 @@ export function KanbanDesktop({
   // Flattened roster for "Claim for…" submenus.
   const roster: RosterMember[] = [
     ...board.kids.map((k) => ({ type: 'kid' as const, id: k.id, name: k.name, color: k.color })),
-    ...board.parents.map((u) => ({ type: 'user' as const, id: u.id, name: u.name })),
+    ...board.parents.map((u) => ({ type: 'user' as const, id: u.id, name: u.name, color: u.color })),
   ];
 
   const onSetStatus: SetStatusFn = (instanceId, payload) =>
@@ -248,6 +248,7 @@ export function KanbanDesktop({
       memberType: 'user',
       memberId: u.id,
       name: u.name,
+      color: u.color,
     })),
   ];
 
@@ -339,9 +340,31 @@ export function KanbanDesktop({
         interval: 5,
       }}
     >
-      <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:gap-5 sm:p-7 2xl:p-10">
-        <div className="mx-auto w-full max-w-[1800px]">
+      {/* Fit-to-viewport board.
+       *
+       * The page chrome (TopBar + DesktopTabs + LegalFooter) and the
+       * Kanban's own header line consume roughly 200px of vertical real
+       * estate. On an old 9.7" iPad (1024×768 CSS, landscape) that leaves
+       * ~560px for the actual board. Rather than letting the page scroll
+       * and forcing a parent to swipe past member lanes, we:
+       *
+       *   1. Lock the board to its parent's height with `h-full
+       *      overflow-hidden` — no page scroll.
+       *   2. Distribute the swim-lane row across the full viewport with
+       *      equal-width columns (via [data-kanban-lanes] CSS).
+       *   3. Let each column scroll its own card list internally.
+       *   4. Render Pending + Completed as a compact bottom strip with
+       *      row-style entries instead of full chore cards — that turns
+       *      a ~280px "second row" into a ~140-180px tray that still
+       *      shows the next 3-4 items at a glance.
+       */}
+      <div
+        data-kanban-root="1"
+        className="flex h-full flex-col gap-3 overflow-hidden p-3 sm:gap-4 sm:p-5 2xl:gap-6 2xl:p-7"
+      >
+        <div className="mx-auto w-full max-w-[1800px] flex-shrink-0">
           <DesktopTitle
+            compact
             date={todayLabel.toUpperCase()}
             title="The board"
             subtitle={
@@ -361,10 +384,10 @@ export function KanbanDesktop({
           />
         </div>
 
-        {/* Row 1 — Available + member lanes. Scroll-snap so flicking a finger
-            lands on a column edge rather than mid-card. */}
-        <div className="mx-auto w-full max-w-[1800px]">
-          <div className="h-scroll-snap -mx-1 flex gap-3 overflow-x-auto px-1 pt-1 pb-3 sm:gap-4 2xl:gap-6">
+        {/* Row 1 — Available + member lanes. Equal-width on tablet+, with
+            horizontal scroll-snap on phones (where 4 columns never fit). */}
+        <div className="mx-auto w-full min-h-0 max-w-[1800px] flex-1">
+          <div data-kanban-lanes>
             <AvailableColumn
               instances={board.instances}
               isParent={isParent}
@@ -392,25 +415,21 @@ export function KanbanDesktop({
           </div>
         </div>
 
-        {/* Row 2 — Pending + Completed */}
-        <div className="mx-auto grid w-full max-w-[1800px] gap-3 sm:grid-cols-2 sm:gap-4 2xl:gap-6">
-          <PendingColumn
+        {/* Row 2 — Pending + Completed compact tray. Each column caps at
+            ~24vh on short viewports and scrolls internally; on a tall
+            monitor it stays a roomy 320px max. */}
+        <div className="mx-auto w-full max-w-[1800px]" data-kanban-tray>
+          <PendingTrayColumn
             instances={board.instances}
             isParent={isParent}
-            me={me}
             lookup={lookup}
-            roster={roster}
             onApprove={(id) => action.mutate({ instanceId: id, action: 'approve' })}
             onReject={(id) => action.mutate({ instanceId: id, action: 'reject' })}
-            onSetStatus={onSetStatus}
             onApproveAll={approveAll}
           />
-          <CompletedColumn
+          <CompletedTrayColumn
             instances={board.instances}
             lookup={lookup}
-            isParent={isParent}
-            roster={roster}
-            onSetStatus={onSetStatus}
           />
         </div>
       </div>
@@ -460,6 +479,16 @@ function humanizeError(code: string): string {
 // Mini leaderboard (top-right of Kanban)
 // ---------------------------------------------------------------------------
 
+/**
+ * Tiny inline leaderboard pill row used in the Kanban's compact header.
+ *
+ * Two breakpoints' worth of layout:
+ *   - `< xl`: horizontal podium — one row of three (rank · avatar ·
+ *     amount) pills that fits in a single 32px line so the title bar
+ *     stays one row tall on an iPad in landscape.
+ *   - `xl+`: the full stacked card with bar charts, ranks, and streak
+ *     chips. Wide screens have room to spare so the richer view shows.
+ */
 function MiniLeaderboard({
   entries,
   maxAmount,
@@ -470,53 +499,95 @@ function MiniLeaderboard({
   memberLookup: ReturnType<typeof rollupByKey>;
 }) {
   return (
-    <div className="card-dark hidden w-72 px-4 py-3 sm:block">
-      <div className="mb-2 flex items-baseline justify-between">
-        <span className="font-display text-sm font-bold">This week</span>
-        <span className="text-[10px] uppercase tracking-wider text-cream-50/60">
-          Pays out
-        </span>
-      </div>
-      <ol className="flex flex-col gap-1.5">
+    <>
+      <div className="hidden items-center gap-1.5 sm:flex xl:hidden">
+        <span className="page-tag mr-1 hidden lg:inline">This week</span>
         {entries.map((e, i) => {
-          const rollup = memberLookup.get(e.memberType, e.memberId);
+          const r = memberLookup.get(e.memberType, e.memberId);
           return (
-            <li
-              key={`${e.memberType}:${e.memberId}`}
-              className="flex items-center gap-2 text-sm"
+            <span
+              key={`mini-${e.memberType}:${e.memberId}`}
+              title={`${e.name} · ${money(e.amountCents)} this week`}
+              className="inline-flex items-center gap-1.5 rounded-full bg-ink-900 px-1.5 py-1 text-[11px] font-bold text-cream-50 ring-2 ring-ink-900"
+              style={{ paddingLeft: i === 0 ? 4 : undefined }}
             >
-              <span className="w-3 text-right text-xs text-cream-50/60">{i + 1}</span>
-              <MemberAvatar name={e.name} color={e.color} size="xs" />
-              <span className="flex flex-1 items-center gap-1.5 truncate">
-                <span className="truncate">{e.name}</span>
-                {rollup && (
-                  <StreakChip
-                    streak={rollup.stats.streak}
-                    bestStreak={rollup.stats.bestStreak}
-                    size="xs"
-                    tone="dark"
-                  />
-                )}
-              </span>
-              <div className="h-1.5 w-12 overflow-hidden rounded-full bg-cream-50/15">
-                <div
-                  className="h-full"
-                  style={{
-                    width: `${(e.amountCents / maxAmount) * 100}%`,
-                    backgroundColor: e.color ?? '#FBF6E6',
-                  }}
-                />
-              </div>
+              {i === 0 && <span aria-hidden>👑</span>}
+              <MemberAvatar
+                name={e.name}
+                color={e.color}
+                size="xs"
+                className="!h-5 !w-5 !text-[10px] !ring-1"
+                level={r?.stats.level ?? null}
+                gender={r?.member.displayGender}
+                showLevelChip={false}
+              />
               <AnimatedNumber
                 value={e.amountCents}
                 format={money}
-                className="font-display tabular-nums"
+                className="font-display tabular-nums text-cream-50"
               />
-            </li>
+            </span>
           );
         })}
-      </ol>
-    </div>
+      </div>
+
+      <div className="card-dark hidden w-72 px-4 py-3 xl:block">
+        <div className="mb-2 flex items-baseline justify-between">
+          <span className="font-display text-sm font-bold">This week</span>
+          <span className="text-[10px] uppercase tracking-wider text-cream-50/60">
+            Pays out
+          </span>
+        </div>
+        <ol className="flex flex-col gap-1.5">
+          {entries.map((e, i) => {
+            const rollup = memberLookup.get(e.memberType, e.memberId);
+            return (
+              <li
+                key={`${e.memberType}:${e.memberId}`}
+                className="flex items-center gap-2 text-sm"
+              >
+                <span className="w-3 text-right text-xs text-cream-50/60">
+                  {i + 1}
+                </span>
+                <MemberAvatar
+                  name={e.name}
+                  color={e.color}
+                  size="xs"
+                  level={rollup?.stats.level ?? null}
+                  gender={rollup?.member.displayGender}
+                  showLevelChip={false}
+                />
+                <span className="flex flex-1 items-center gap-1.5 truncate">
+                  <span className="truncate">{e.name}</span>
+                  {rollup && (
+                    <StreakChip
+                      streak={rollup.stats.streak}
+                      bestStreak={rollup.stats.bestStreak}
+                      size="xs"
+                      tone="dark"
+                    />
+                  )}
+                </span>
+                <div className="h-1.5 w-12 overflow-hidden rounded-full bg-cream-50/15">
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${(e.amountCents / maxAmount) * 100}%`,
+                      backgroundColor: e.color ?? '#FBF6E6',
+                    }}
+                  />
+                </div>
+                <AnimatedNumber
+                  value={e.amountCents}
+                  format={money}
+                  className="font-display tabular-nums"
+                />
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </>
   );
 }
 
@@ -553,17 +624,18 @@ function AvailableColumn({
     <section
       ref={setNodeRef}
       data-droppable="1"
-      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky bg-ink-900 p-3 text-cream-50 ring-2 ring-ink-900 shadow-paper sm:w-[20rem] xl:w-[22rem] 2xl:w-[24rem] ${
+      data-kanban-col=""
+      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky bg-ink-900 p-2.5 text-cream-50 ring-2 ring-ink-900 shadow-paper sm:p-3 ${
         isOver ? 'outline outline-2 outline-offset-2 outline-accent-yellow' : ''
       }`}
     >
-      <header className="sticky top-0 z-10 flex items-center justify-between rounded-t-chunky bg-ink-900 px-2 py-2">
-        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
+      <header className="flex flex-shrink-0 items-center justify-between rounded-t-chunky bg-ink-900 px-1.5 py-1">
+        <h2 className="font-display text-sm font-bold sm:text-base 2xl:text-lg">
           Available · <span className="text-cream-50/60">{items.length}</span>
         </h2>
         {onSpawn && <SpawnPicker chores={activeChores} onSpawn={onSpawn} />}
       </header>
-      <div className="flex flex-col gap-2">
+      <div data-kanban-col-list="" className="flex flex-col gap-2 pr-0.5">
         {items.length === 0 && (
           <EmptyState
             illustration="available"
@@ -699,7 +771,8 @@ function MemberColumn({
     <section
       ref={setNodeRef}
       data-droppable="1"
-      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky p-3 ring-2 ring-ink-900 shadow-paper transition sm:w-[20rem] xl:w-[22rem] 2xl:w-[24rem] ${
+      data-kanban-col=""
+      className={`flex w-[18rem] flex-shrink-0 flex-col gap-2 rounded-chunky p-2.5 ring-2 ring-ink-900 shadow-paper transition sm:p-3 ${
         isOver ? 'outline outline-2 outline-offset-2' : ''
       }`}
       style={{
@@ -707,10 +780,16 @@ function MemberColumn({
         outlineColor: isOver ? accent : 'transparent',
       }}
     >
-      <header className="flex items-center justify-between gap-2 px-1">
+      <header className="flex flex-shrink-0 items-center justify-between gap-2 px-1">
         <div className="flex min-w-0 items-center gap-2">
-          <MemberAvatar name={column.name} color={accent} size="sm" />
-          <h2 className="truncate font-display text-base font-bold sm:text-lg 2xl:text-xl">
+          <MemberAvatar
+            name={column.name}
+            color={accent}
+            size="sm"
+            level={rollup?.stats.level ?? null}
+            gender={rollup?.member.displayGender}
+          />
+          <h2 className="truncate font-display text-sm font-bold sm:text-base 2xl:text-lg">
             {column.name}
           </h2>
           {rollup && (
@@ -727,7 +806,7 @@ function MemberColumn({
           className="money-amt text-sm sm:text-base"
         />
       </header>
-      <div className="flex flex-col gap-2">
+      <div data-kanban-col-list="" className="flex flex-col gap-2 pr-0.5">
         {items.length === 0 ? (
           <DropHint accent={accent} />
         ) : (
@@ -776,25 +855,29 @@ function DropHint({ accent }: { accent: string }) {
   );
 }
 
-function PendingColumn({
+/**
+ * Compact tray version of the Pending column. Lives in Row 2 of the board
+ * and renders each pending chore as a single dense row (avatar · name ·
+ * meta · approve · reject) instead of the full chore card. This keeps the
+ * "needs a parent" queue glanceable without consuming a full card's worth
+ * of vertical real estate per item.
+ *
+ * Drag-and-drop is retained on the section itself so dragging a claimed
+ * card onto the tray still submits it.
+ */
+function PendingTrayColumn({
   instances,
   isParent,
-  me,
   lookup,
-  roster,
   onApprove,
   onReject,
-  onSetStatus,
   onApproveAll,
 }: {
   instances: BoardInstance[];
   isParent: boolean;
-  me: { type: 'user' | 'kid'; id: string } | null;
   lookup: ReturnType<typeof buildMemberLookup>;
-  roster: RosterMember[];
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
-  onSetStatus: SetStatusFn;
   onApproveAll?: () => void;
 }) {
   const items = useMemo(
@@ -809,24 +892,31 @@ function PendingColumn({
     <section
       ref={setNodeRef}
       data-droppable="1"
-      className={`card flex flex-col gap-2 p-4 sm:p-5 ${
+      data-tray-col=""
+      className={`card gap-2 p-3 sm:p-3.5 ${
         isOver ? 'outline outline-2 outline-offset-2 outline-accent-orange' : ''
       }`}
     >
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
+      <header className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 pb-1">
+        <h2 className="font-display text-sm font-bold sm:text-base">
           Pending · <span className="text-ink-500">{items.length}</span>
         </h2>
-        <div className="flex items-center gap-2">
-          {items.length > 0 && <span className="pill-pending">{items.length} waiting</span>}
+        <div className="flex items-center gap-1.5">
+          {items.length > 0 && (
+            <span className="pill-pending">{items.length} waiting</span>
+          )}
           {isParent && items.length >= 2 && onApproveAll && (
-            <button type="button" className="btn-money" onClick={onApproveAll}>
+            <button
+              type="button"
+              className="btn-money !min-h-[32px] !px-3 !py-1 text-xs"
+              onClick={onApproveAll}
+            >
               Approve all
             </button>
           )}
         </div>
       </header>
-      <div className="flex flex-col gap-2">
+      <div data-tray-list="" className="flex flex-col gap-1.5 pr-0.5">
         {items.length === 0 ? (
           <EmptyState
             illustration="pending"
@@ -841,17 +931,45 @@ function PendingColumn({
                 ? lookup.byKey(inst.claimedByType, inst.claimedById)
                 : undefined;
             return (
-              <DraggableCard
+              <TrayRow
                 key={inst.id}
                 instance={inst}
-                draggable={canDrag(inst, { kind: 'pending' }, isParent, me)}
-                claimedByName={claimer?.name ?? null}
-                showApproveActions={isParent}
-                onApprove={onApprove}
-                onReject={onReject}
-                isParent={isParent}
-                roster={roster}
-                onSetStatus={onSetStatus}
+                claimer={claimer}
+                actions={
+                  isParent ? (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (
+                            e.currentTarget as HTMLElement
+                          ).getBoundingClientRect();
+                          celebrate(
+                            { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+                            { pieces: 22, spread: 130, durationMs: 1500 },
+                          );
+                          onApprove(inst.id);
+                        }}
+                        className="btn-money !min-h-[32px] !px-2.5 !py-1 text-xs"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onReject(inst.id);
+                        }}
+                        className="btn-secondary !min-h-[32px] !px-2.5 !py-1 text-xs"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  ) : null
+                }
               />
             );
           })
@@ -861,18 +979,17 @@ function PendingColumn({
   );
 }
 
-function CompletedColumn({
+/**
+ * Compact tray version of "Completed today". Read-only summary — the
+ * point on the Kanban is "what got done"; the audit trail lives on the
+ * Budget desktop.
+ */
+function CompletedTrayColumn({
   instances,
   lookup,
-  isParent,
-  roster,
-  onSetStatus,
 }: {
   instances: BoardInstance[];
   lookup: ReturnType<typeof buildMemberLookup>;
-  isParent: boolean;
-  roster: RosterMember[];
-  onSetStatus: SetStatusFn;
 }) {
   const items = useMemo(
     () =>
@@ -882,16 +999,16 @@ function CompletedColumn({
     [instances],
   );
   return (
-    <section className="card flex flex-col gap-2 p-4 sm:p-5">
-      <header className="flex items-center justify-between">
-        <h2 className="font-display text-base font-bold sm:text-lg 2xl:text-xl">
+    <section data-tray-col="" className="card gap-2 p-3 sm:p-3.5">
+      <header className="flex flex-shrink-0 items-center justify-between pb-1">
+        <h2 className="font-display text-sm font-bold sm:text-base">
           Completed today · <span className="text-ink-500">{items.length}</span>
         </h2>
         {items.length > 0 && (
           <span className="pill-approved">✓ {items.length}</span>
         )}
       </header>
-      <div className="flex flex-col gap-2">
+      <div data-tray-list="" className="flex flex-col gap-1.5 pr-0.5">
         {items.length === 0 ? (
           <EmptyState
             illustration="completed"
@@ -905,22 +1022,69 @@ function CompletedColumn({
               inst.claimedByType && inst.claimedById
                 ? lookup.byKey(inst.claimedByType, inst.claimedById)
                 : undefined;
-            return (
-              <CardShell
-                key={inst.id}
-                instance={inst}
-                draggable={false}
-                claimedByName={claimer?.name ?? null}
-                accentColor={claimer?.color}
-                isParent={isParent}
-                roster={roster}
-                onSetStatus={onSetStatus}
-              />
-            );
+            return <TrayRow key={inst.id} instance={inst} claimer={claimer} dimmed />;
           })
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Single-row entry for the Pending / Completed tray. Renders all the same
+ * info as a full chore card (chore name, claimant, money, status,
+ * overdue state) but in a flat row — roughly 40px tall, vs ~95px for the
+ * full card. This is what makes the bottom strip fit in ~140-180px on
+ * the iPad without losing context.
+ */
+function TrayRow({
+  instance,
+  claimer,
+  actions,
+  dimmed,
+}: {
+  instance: BoardInstance;
+  claimer?: { name: string; color?: string };
+  actions?: ReactNode;
+  dimmed?: boolean;
+}) {
+  const overdue = instance.overdue;
+  // When a claimer's accent is set we want both the left-edge color ribbon
+  // *and* whatever ring the row's status calls for (red when overdue, ink
+  // otherwise). The combined inline box-shadow needs to win over the CSS
+  // selectors via specificity, so we compose the full shadow string here
+  // when a ribbon is in play and let the CSS default render otherwise.
+  const ringColor = overdue ? '#DB4646' : 'rgba(16, 24, 43, 0.92)';
+  return (
+    <div
+      data-tray-item=""
+      data-overdue={overdue ? '1' : undefined}
+      style={
+        claimer?.color
+          ? {
+              boxShadow: `inset 4px 0 0 0 ${claimer.color}, inset 0 0 0 2px ${ringColor}`,
+            }
+          : undefined
+      }
+    >
+      {claimer && (
+        <MemberAvatar name={claimer.name} color={claimer.color} size="xs" />
+      )}
+      <span data-tray-name="" className={dimmed ? 'opacity-80' : undefined}>
+        {instance.choreName}
+      </span>
+      <span data-tray-meta="" className="hidden sm:inline">
+        {instance.status === 'approved' && instance.approvedAt
+          ? relativePast(instance.approvedAt)
+          : instance.status === 'pending' && instance.completedAt
+            ? `done ${relativePast(instance.completedAt)}`
+            : claimer?.name ?? ''}
+      </span>
+      <span className={`money-amt flex-shrink-0 text-sm ${dimmed ? 'opacity-70' : ''}`}>
+        {money(instance.amountCents)}
+      </span>
+      {actions}
+    </div>
   );
 }
 
@@ -1058,6 +1222,7 @@ function CardShell({
   const overdue = instance.overdue;
   return (
     <article
+      data-chore-card=""
       className={`relative flex select-none items-start gap-3 rounded-xl bg-paper p-3 ring-2 ring-ink-900 shadow-paper-sm transition ${
         overlay ? '' : 'animate-floatIn'
       } ${draggable ? 'cursor-grab hover:-translate-y-0.5 hover:shadow-paper active:cursor-grabbing' : 'cursor-default'} ${
@@ -1202,7 +1367,10 @@ function EvidenceHint({ instance }: { instance: BoardInstance }) {
       : 'Photo evidence optional';
 
   return (
-    <div className="mt-2 rounded-lg border-2 border-dashed border-ink-900/20 bg-cream-100 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+    <div
+      data-evidence-hint=""
+      className="mt-2 rounded-lg border-2 border-dashed border-ink-900/20 bg-cream-100 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500"
+    >
       {label}
     </div>
   );

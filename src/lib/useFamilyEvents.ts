@@ -55,18 +55,41 @@ export function useFamilyEvents(enabled: boolean): void {
     const handlers: Record<string, (raw: any) => void> = {
       'instance.claimed': () => inv(['board']),
       'instance.submitted': () => inv(['board']),
-      'instance.approved': () => inv(['board'], ['leaderboard'], ['member'], ['family-stats'], ['goals'], ['ledger']),
-      'instance.rejected': () => inv(['board']),
+      'instance.approved': () =>
+        inv(
+          ['board'],
+          ['leaderboard'],
+          ['member'],
+          ['family-stats'],
+          ['goals'],
+          ['ledger'],
+          ['history'],
+        ),
+      'instance.rejected': () => inv(['board'], ['history']),
       'instance.materialized': () => inv(['board']),
-      'instance.missed': () => inv(['board']),
+      'instance.missed': () => inv(['board'], ['history']),
       'chore.updated': () => inv(['chores'], ['board']),
       'badge.awarded': () => inv(['member']),
       'goal.hit': () => inv(['goals'], ['member']),
       'goal.updated': () => inv(['goals']),
-      'level.up': () => inv(['member']),
-      'ledger.paid': () => inv(['ledger'], ['member'], ['leaderboard'], ['goals']),
+      'level.up': (data) => {
+        inv(['member']);
+        // Re-broadcast so <LevelUpCelebrator /> can render a celebration
+        // overlay regardless of which desktop is currently visible.
+        window.dispatchEvent(
+          new CustomEvent('cb:level.up', {
+            detail: {
+              memberType: data?.memberType ?? null,
+              memberId: data?.memberId ?? null,
+              level: typeof data?.level === 'number' ? data.level : null,
+            },
+          }),
+        );
+      },
+      'ledger.paid': () =>
+        inv(['ledger'], ['member'], ['leaderboard'], ['goals'], ['history']),
       'family.updated': () =>
-        inv(['family'], ['board'], ['leaderboard'], ['chores']),
+        inv(['family'], ['board'], ['leaderboard'], ['chores'], ['history']),
       'whiteboard.created': () => inv(['whiteboards']),
       'whiteboard.updated': (data) => {
         inv(['whiteboards']);
@@ -112,6 +135,7 @@ export function useFamilyEvents(enabled: boolean): void {
           ['family-stats'],
           ['ledger'],
           ['goals'],
+          ['history'],
         );
         // Re-dispatch as a window event so the Champion banner can render
         // without subscribing to SSE directly.

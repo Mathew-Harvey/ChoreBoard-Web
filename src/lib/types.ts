@@ -3,6 +3,12 @@
 
 export type Role = 'owner' | 'parent';
 export type MemberType = 'user' | 'kid';
+/**
+ * Member-stated gender used to pick a tier portrait set. `unspecified` ("rather
+ * not say") is the default and renders an alternating m/f portrait so a
+ * "rather not say" member still gets a personal-feeling avatar.
+ */
+export type StatedGender = 'male' | 'female' | 'unspecified';
 export type InstanceStatus =
   | 'available'
   | 'claimed'
@@ -18,6 +24,8 @@ export type ParentPrincipal = {
   role: Role;
   name: string;
   email: string;
+  color: string;
+  gender: StatedGender;
 };
 
 export type KidPrincipal = {
@@ -26,6 +34,7 @@ export type KidPrincipal = {
   familyId: string;
   name: string;
   color: string;
+  gender: StatedGender;
 };
 
 export type Principal = ParentPrincipal | KidPrincipal;
@@ -38,8 +47,21 @@ export type Family = {
   timezone: string;
 };
 
-export type Kid = { id: string; name: string; color: string; avatar?: string | null };
-export type Parent = { id: string; name: string; role: Role; avatar?: string | null };
+export type Kid = {
+  id: string;
+  name: string;
+  color: string;
+  avatar?: string | null;
+  gender: StatedGender;
+};
+export type Parent = {
+  id: string;
+  name: string;
+  role: Role;
+  color: string;
+  avatar?: string | null;
+  gender: StatedGender;
+};
 
 export type FamilyInvite = {
   id: string;
@@ -111,6 +133,7 @@ export type LeaderboardEntry = {
   name: string;
   color?: string;
   avatar?: string | null;
+  gender: StatedGender;
   amountCents: number;
   choreCount: number;
 };
@@ -297,4 +320,125 @@ export type LedgerEntry = {
   paidAt: string | null;
   weekId: string | null;
   choreName: string;
+};
+
+// History dashboard --------------------------------------------------------
+//
+// Mirrors GET /api/stats/history. Single rich payload that powers the
+// History desktop tab — totals + trend + member/chore leaderboards +
+// weeks-gone-by table + status breakdown for an arbitrary date range or
+// preset.
+
+export type HistoryPreset =
+  | 'this_week'
+  | 'last_week'
+  | 'last_4_weeks'
+  | 'this_month'
+  | 'last_3_months'
+  | 'this_year'
+  | 'all_time';
+
+export type HistoryRange = {
+  from: string;
+  to: string;
+  days: number;
+  label: string;
+  preset: HistoryPreset | 'custom';
+};
+
+export type HistoryDayBucket = {
+  date: string; // YYYY-MM-DD in family TZ
+  cents: number;
+  chores: number;
+};
+
+export type HistoryMemberRow = {
+  memberType: MemberType;
+  memberId: string;
+  name: string;
+  color?: string;
+  avatar?: string | null;
+  cents: number;
+  chores: number;
+};
+
+export type HistoryChoreRow = {
+  choreId: string;
+  name: string;
+  cents: number;
+  count: number;
+};
+
+export type HistoryWeekRow = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  closedAt: string | null;
+  championMemberType: MemberType | null;
+  championMemberId: string | null;
+  championAmountCents: number | null;
+  championName: string | null;
+  championColor: string | null;
+  totalCents: number;
+  choreCount: number;
+};
+
+export type HistoryDayOfWeekRow = {
+  dow: number; // 0=Sun … 6=Sat (family TZ)
+  cents: number;
+  chores: number;
+};
+
+export type HistoryBiggestSingle = {
+  ledgerId: string;
+  choreId: string;
+  choreName: string;
+  memberType: MemberType;
+  memberId: string;
+  memberName: string;
+  memberColor: string | null;
+  cents: number;
+  earnedAt: string;
+};
+
+export type HistoryMostRepeated = {
+  choreId: string;
+  name: string;
+  count: number;
+  cents: number;
+};
+
+export type HistoryHighlights = {
+  bestWeek: HistoryWeekRow | null;
+  biggestSingle: HistoryBiggestSingle | null;
+  mostRepeated: HistoryMostRepeated | null;
+};
+
+export type HistoryResponse = {
+  range: HistoryRange;
+  previousRange: { from: string; to: string } | null;
+  totals: {
+    cents: number;
+    chores: number;
+    activeMembers: number;
+    avgPerChoreCents: number;
+    avgPerDayCents: number;
+    bestDay: { date: string; cents: number; chores: number } | null;
+    previousCents: number | null;
+    previousChores: number | null;
+    deltaCents: number | null;
+    deltaPct: number | null;
+  };
+  daily: HistoryDayBucket[];
+  previousDaily: HistoryDayBucket[];
+  byDayOfWeek: HistoryDayOfWeekRow[];
+  byMember: HistoryMemberRow[];
+  byChore: HistoryChoreRow[];
+  weeks: HistoryWeekRow[];
+  statusBreakdown: {
+    approved: number;
+    missed: number;
+    rejected: number;
+  };
+  highlights: HistoryHighlights;
 };

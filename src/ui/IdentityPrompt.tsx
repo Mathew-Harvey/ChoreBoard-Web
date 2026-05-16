@@ -313,7 +313,7 @@ function RosterPicker({
                       : 'Open the app on your phone to act as this parent'
                   }
                 >
-                  <MemberAvatar name={p.name} color="#3253D7" size="md" />
+                  <MemberAvatar name={p.name} color={p.color} size="md" />
                   <span className="font-display text-base font-extrabold text-cream-50 sm:text-lg">
                     {p.name}
                   </span>

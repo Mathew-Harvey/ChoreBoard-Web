@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
-import type { PublicInvite } from '../lib/types';
-import { Wordmark } from '../ui/primitives';
+import type { PublicInvite, StatedGender } from '../lib/types';
+import { GenderPicker, Wordmark } from '../ui/primitives';
 
 /**
  * Public co-parent join flow. The token comes from the URL the owner shared
@@ -18,6 +18,8 @@ export function JoinFamilyScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // "Rather not say" by default — backend resolves to alternating m/f art.
+  const [gender, setGender] = useState<StatedGender>('unspecified');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const inviteQ = useQuery({
@@ -29,7 +31,12 @@ export function JoinFamilyScreen() {
 
   const accept = useMutation({
     mutationFn: () =>
-      api.post(`/api/auth/invites/${token}/accept`, { name, email, password }),
+      api.post(`/api/auth/invites/${token}/accept`, {
+        name,
+        email,
+        password,
+        gender,
+      }),
     onSuccess: async () => {
       try {
         localStorage.setItem('cb_terms_accepted_at', new Date().toISOString());
@@ -132,6 +139,9 @@ export function JoinFamilyScreen() {
                         required
                         minLength={8}
                       />
+                    </Field>
+                    <Field label="Gender (for your avatar art)">
+                      <GenderPicker value={gender} onChange={setGender} />
                     </Field>
                     <label className="mt-1 flex items-start gap-3 rounded-xl bg-cream-50 px-3 py-3 text-sm text-ink-700 ring-2 ring-ink-900/15">
                       <input

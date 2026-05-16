@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { BoardResponse } from '../lib/types';
+import type { BoardResponse, MemberStats } from '../lib/types';
 import { money } from '../lib/format';
 import { MemberAvatar, buildMemberLookup } from './primitives';
 
@@ -27,6 +27,22 @@ export function ChampionBanner() {
     queryFn: () => api.get<BoardResponse>('/api/board'),
     enabled: !!evt,
   });
+
+  // Pull champion's stats so the banner uses their tier portrait instead of
+  // the boring initial disc. Only enabled while a celebration is showing.
+  const championStats = useQuery({
+    queryKey: [
+      'member',
+      evt?.championMemberType ?? '',
+      evt?.championMemberId ?? '',
+    ],
+    queryFn: () =>
+      api.get<MemberStats>(
+        `/api/stats/member/${evt!.championMemberType}/${evt!.championMemberId}`,
+      ),
+    enabled: !!evt && !!evt.championMemberType && !!evt.championMemberId,
+  });
+  const championLevel = championStats.data?.stats.level ?? null;
 
   useEffect(() => {
     function onWeekClosed(e: Event) {
@@ -74,13 +90,34 @@ export function ChampionBanner() {
           <>
             <div className="relative mx-auto inline-block">
               <div className="hidden 2xl:block">
-                <MemberAvatar name={champ.name} color={champ.color} size="3xl" />
+                <MemberAvatar
+                  name={champ.name}
+                  color={champ.color}
+                  size="3xl"
+                  level={championLevel}
+                  gender={champ.gender}
+                  glow
+                />
               </div>
               <div className="hidden lg:block 2xl:hidden">
-                <MemberAvatar name={champ.name} color={champ.color} size="2xl" />
+                <MemberAvatar
+                  name={champ.name}
+                  color={champ.color}
+                  size="2xl"
+                  level={championLevel}
+                  gender={champ.gender}
+                  glow
+                />
               </div>
               <div className="lg:hidden">
-                <MemberAvatar name={champ.name} color={champ.color} size="xl" />
+                <MemberAvatar
+                  name={champ.name}
+                  color={champ.color}
+                  size="xl"
+                  level={championLevel}
+                  gender={champ.gender}
+                  glow
+                />
               </div>
               <span
                 aria-hidden

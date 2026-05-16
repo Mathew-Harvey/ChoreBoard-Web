@@ -190,7 +190,13 @@ export function FamilyDashboard({
                       <span className="w-4 text-right text-sm font-semibold text-ink-500">
                         {i + 1}
                       </span>
-                      <MemberAvatar name={e.name} color={e.color} size="sm" />
+                      <MemberAvatar
+                        name={e.name}
+                        color={e.color}
+                        size="sm"
+                        level={rollup?.stats.level ?? null}
+                        gender={rollup?.member.displayGender}
+                      />
                       <div className="flex flex-1 items-center gap-3">
                         <div className="flex-1">
                           <div className="flex items-baseline justify-between gap-3">

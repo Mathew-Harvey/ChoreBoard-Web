@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
 import { useSession } from '../../lib/session';
-import type { Family, FamilyInvite, Kid, Parent } from '../../lib/types';
-import { MemberAvatar } from '../../ui/primitives';
+import type { Family, FamilyInvite, Kid, Parent, StatedGender } from '../../lib/types';
+import { GenderPicker, MemberAvatar } from '../../ui/primitives';
 import { toastError, toastSuccess } from '../../ui/Toast';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -61,6 +61,17 @@ export function AdminFamily() {
     },
     onError: (err) => {
       if (err instanceof ApiError) toastError('Couldn’t update kid', err.message);
+    },
+  });
+  const patchParent = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: any }) =>
+      api.patch(`/api/family/parents/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family'] });
+      qc.invalidateQueries({ queryKey: ['session'] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError('Couldn’t update parent', err.message);
     },
   });
   const delKid = useMutation({
@@ -165,10 +176,16 @@ export function AdminFamily() {
     },
   });
 
-  const [newKid, setNewKid] = useState({
+  const [newKid, setNewKid] = useState<{
+    name: string;
+    pin: string;
+    color: string;
+    gender: StatedGender;
+  }>({
     name: '',
     pin: '',
     color: COLORS[0]!,
+    gender: 'unspecified',
   });
 
   if (fam.isLoading || !fam.data) return <p className="text-ink-500">Loading…</p>;
@@ -300,6 +317,18 @@ export function AdminFamily() {
                   aria-label={`Reset ${k.name}'s PIN`}
                 />
               </div>
+              <div className="col-span-2 col-start-2 row-start-3 flex items-center gap-3 sm:col-span-3 sm:col-start-1">
+                <span className="text-xs font-semibold uppercase tracking-wider text-ink-500">
+                  Avatar
+                </span>
+                <GenderPicker
+                  size="sm"
+                  value={k.gender}
+                  onChange={(next) =>
+                    patchKid.mutate({ id: k.id, body: { gender: next } })
+                  }
+                />
+              </div>
             </li>
           ))}
         </ul>
@@ -345,6 +374,12 @@ export function AdminFamily() {
                 ))}
               </div>
             </Field>
+            <Field label="Gender (for the avatar art)" className="sm:col-span-2">
+              <GenderPicker
+                value={newKid.gender}
+                onChange={(next) => setNewKid({ ...newKid, gender: next })}
+              />
+            </Field>
           </div>
           <button
             className="btn-primary mt-4 w-full sm:w-auto"
@@ -355,7 +390,13 @@ export function AdminFamily() {
             }
             onClick={() => {
               createKid.mutate(newKid, {
-                onSuccess: () => setNewKid({ name: '', pin: '', color: COLORS[0]! }),
+                onSuccess: () =>
+                  setNewKid({
+                    name: '',
+                    pin: '',
+                    color: COLORS[0]!,
+                    gender: 'unspecified',
+                  }),
               });
             }}
           >
@@ -371,7 +412,7 @@ export function AdminFamily() {
           a co-parent to <strong>co-owner</strong> to grant them billing,
           invites, and family-deletion rights too.
         </p>
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-3">
           {fam.data.parents.map((u) => {
             const isSelf = session.data?.kind === 'parent' && session.data.userId === u.id;
             const viewerIsOwner =
@@ -381,50 +422,88 @@ export function AdminFamily() {
             return (
               <li
                 key={u.id}
-                className="flex flex-wrap items-center gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900"
+                className="grid grid-cols-[auto_1fr_auto] gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900 sm:p-4"
               >
-                <MemberAvatar name={u.name} color="#3253D7" size="md" />
-                <span className="truncate font-semibold">
-                  {u.name}
-                  {isSelf && <span className="ml-1 text-ink-500">(you)</span>}
-                </span>
-                <span className="pill ml-auto capitalize">{u.role}</span>
-                {canPromote && (
-                  <button
-                    className="btn-secondary w-full sm:w-auto"
-                    disabled={promoteParent.isPending}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Promote ${u.name} to co-owner? They’ll get full admin access — billing, invites, removing parents, and deleting the family. There’s no demote button in v1.`,
-                        )
-                      ) {
-                        promoteParent.mutate(u.id);
-                      }
+                <div className="row-span-2 flex items-start sm:row-span-1 sm:items-center">
+                  <MemberAvatar name={u.name} color={u.color} size="md" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <input
+                    className="input sm:max-w-xs"
+                    defaultValue={u.name}
+                    onBlur={(e) => {
+                      if (e.target.value.trim() && e.target.value !== u.name)
+                        patchParent.mutate({ id: u.id, body: { name: e.target.value } });
                     }}
-                  >
-                    {promoteParent.isPending && promoteParent.variables === u.id
-                      ? 'Promoting…'
-                      : 'Promote to co-owner'}
-                  </button>
-                )}
-                {canRemove && (
-                  <button
-                    className="btn-danger w-full sm:w-auto"
-                    disabled={removeParent.isPending}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Remove ${u.name} from the family? They’ll be signed out immediately and lose access.`,
-                        )
-                      ) {
-                        removeParent.mutate(u.id);
-                      }
-                    }}
-                  >
-                    Remove
-                  </button>
-                )}
+                    aria-label={`${u.name}'s name`}
+                  />
+                  {isSelf && <span className="text-sm text-ink-500">(you)</span>}
+                  <span className="pill capitalize">{u.role}</span>
+                </div>
+                <div className="col-start-3 row-start-1 flex flex-wrap items-start justify-end gap-2 self-start sm:items-center sm:self-center">
+                  {canPromote && (
+                    <button
+                      className="btn-secondary"
+                      disabled={promoteParent.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Promote ${u.name} to co-owner? They’ll get full admin access — billing, invites, removing parents, and deleting the family. There’s no demote button in v1.`,
+                          )
+                        ) {
+                          promoteParent.mutate(u.id);
+                        }
+                      }}
+                    >
+                      {promoteParent.isPending && promoteParent.variables === u.id
+                        ? 'Promoting…'
+                        : 'Promote to co-owner'}
+                    </button>
+                  )}
+                  {canRemove && (
+                    <button
+                      className="btn-danger"
+                      disabled={removeParent.isPending}
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Remove ${u.name} from the family? They’ll be signed out immediately and lose access.`,
+                          )
+                        ) {
+                          removeParent.mutate(u.id);
+                        }
+                      }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="col-span-2 col-start-2 row-start-2 flex flex-wrap gap-1.5 sm:col-span-3 sm:col-start-1 sm:row-start-2">
+                  {COLORS.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => patchParent.mutate({ id: u.id, body: { color: c } })}
+                      className={`h-8 w-8 rounded-full ring-2 ring-ink-900 transition ${
+                        u.color === c ? 'scale-110 shadow-paper-sm' : 'opacity-80 hover:opacity-100'
+                      }`}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Color ${c}`}
+                      aria-pressed={u.color === c}
+                    />
+                  ))}
+                </div>
+                <div className="col-span-2 col-start-2 row-start-3 flex items-center gap-3 sm:col-span-3 sm:col-start-1">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-ink-500">
+                    Avatar
+                  </span>
+                  <GenderPicker
+                    size="sm"
+                    value={u.gender}
+                    onChange={(next) =>
+                      patchParent.mutate({ id: u.id, body: { gender: next } })
+                    }
+                  />
+                </div>
               </li>
             );
           })}

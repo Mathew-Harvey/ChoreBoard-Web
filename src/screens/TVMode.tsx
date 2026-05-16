@@ -15,6 +15,7 @@ import type {
   Goal,
   LeaderboardResponse,
   MemberType,
+  Principal,
 } from '../lib/types';
 import { AnimatedNumber } from '../ui/AnimatedNumber';
 import { ChoreIcon, MemberAvatar, ProgressBar } from '../ui/primitives';
@@ -103,9 +104,11 @@ export function TVMode({ onExit }: { onExit: () => void }) {
   // Identity gate: every claim / submit on the wall iPad asks "Who's this?"
   // up front so siblings can't act on each other's behalf by accident.
   type Pending =
+    | { kind: 'identify'; scope?: IdentityScope }
     | { kind: 'claim'; instance: BoardInstance }
     | { kind: 'done'; instance: BoardInstance };
   const [pending, setPending] = useState<Pending | null>(null);
+  const [claimant, setClaimant] = useState<ResolvedIdentity | null>(null);
 
   // Auto-rotation pause window after any interaction so we don't yank the
   // slide out from under a kid mid-PIN. 30 seconds resumes us automatically.
@@ -192,8 +195,13 @@ export function TVMode({ onExit }: { onExit: () => void }) {
     const p = pending;
     setPending(null);
     if (!p) return;
-    if (p.kind === 'claim') claim.mutate({ instanceId: p.instance.id, identity: id });
-    else submit.mutate({ instanceId: p.instance.id, identity: id });
+    if (p.kind === 'identify') {
+      setClaimant(id);
+    } else if (p.kind === 'claim') {
+      claim.mutate({ instanceId: p.instance.id, identity: id });
+    } else {
+      submit.mutate({ instanceId: p.instance.id, identity: id });
+    }
   };
 
   // Per-member streak rollup shared across the app.
@@ -205,7 +213,10 @@ export function TVMode({ onExit }: { onExit: () => void }) {
   // Interactive slides are pinned earlier in the carousel so a kid walking
   // up to the wall sees their actionable options within ~22 seconds.
   const slides = useMemo(() => {
-    const list: Array<{ id: string; theme: SlideTheme }> = [{ id: 'hero', theme: 'gold' }];
+    const list: Array<{ id: string; theme: SlideTheme }> = [
+      { id: 'hero', theme: 'gold' },
+      { id: 'family', theme: 'purple' },
+    ];
     const availableNow = (board.data?.instances ?? []).filter(
       (i) => i.status === 'available',
     );
@@ -244,10 +255,6 @@ export function TVMode({ onExit }: { onExit: () => void }) {
     if (lastClosed) {
       list.push({ id: 'champion', theme: 'gold' });
     }
-    // Lifetime family stats — fun ambient context, always last in the loop.
-    if ((familyStats.data?.lifetimeChores ?? 0) > 0) {
-      list.push({ id: 'family', theme: 'purple' });
-    }
     return list;
   }, [
     board.data,
@@ -255,7 +262,6 @@ export function TVMode({ onExit }: { onExit: () => void }) {
     goals.data,
     memberRollup,
     weeks.data,
-    familyStats.data,
   ]);
 
   const [idx, setIdx] = useState(0);
@@ -394,10 +400,24 @@ export function TVMode({ onExit }: { onExit: () => void }) {
           {slide?.id === 'available' && board.data && (
             <AvailableSlide
               instances={board.data.instances}
+              kids={board.data.kids}
+              parents={board.data.parents}
+              claimant={claimant}
+              memberLookup={memberLookup}
+              onChooseClaimant={(scope) => {
+                tinyHaptic();
+                bumpInteraction();
+                setPending({ kind: 'identify', scope });
+              }}
+              onClearClaimant={() => setClaimant(null)}
               onClaim={(inst) => {
                 tinyHaptic();
                 bumpInteraction();
-                setPending({ kind: 'claim', instance: inst });
+                if (claimant) {
+                  claim.mutate({ instanceId: inst.id, identity: claimant });
+                } else {
+                  setPending({ kind: 'identify' });
+                }
               }}
             />
           )}
@@ -458,10 +478,10 @@ export function TVMode({ onExit }: { onExit: () => void }) {
           {slide?.id === 'champion' && weeks.data && board.data && (
             <ChampionSlide weeks={weeks.data} board={board.data} />
           )}
-          {slide?.id === 'family' && familyStats.data && (
+          {slide?.id === 'family' && (
             <FamilyStatsSlide
-              lifetimeCents={familyStats.data.lifetimeCents}
-              lifetimeChores={familyStats.data.lifetimeChores}
+              lifetimeCents={familyStats.data?.lifetimeCents ?? 0}
+              lifetimeChores={familyStats.data?.lifetimeChores ?? 0}
               weekCount={(weeks.data ?? []).filter((w) => w.closedAt).length}
               memberCount={
                 (board.data?.kids.length ?? 0) + (board.data?.parents.length ?? 0)
@@ -513,7 +533,9 @@ export function TVMode({ onExit }: { onExit: () => void }) {
       <IdentityPrompt
         open={pending !== null}
         prompt={
-          pending?.kind === 'claim'
+          pending?.kind === 'identify'
+            ? "Who's claiming chores?"
+            : pending?.kind === 'claim'
             ? `Who's claiming "${pending.instance.choreName}"?`
             : pending?.kind === 'done'
               ? `Done with "${pending.instance.choreName}"?`
@@ -557,8 +579,9 @@ export function TVMode({ onExit }: { onExit: () => void }) {
   );
 }
 
-function pendingScope(pending: { kind: 'claim' | 'done'; instance: BoardInstance } | null): IdentityScope {
+function pendingScope(pending: PendingLike | null): IdentityScope {
   if (!pending) return 'any';
+  if (pending.kind === 'identify') return pending.scope ?? 'any';
   if (pending.kind === 'claim') return 'any';
   const inst = pending.instance;
   if (inst.claimedByType && inst.claimedById) {
@@ -566,6 +589,10 @@ function pendingScope(pending: { kind: 'claim' | 'done'; instance: BoardInstance
   }
   return 'any';
 }
+
+type PendingLike =
+  | { kind: 'identify'; scope?: IdentityScope }
+  | { kind: 'claim' | 'done'; instance: BoardInstance };
 
 function friendlyError(code: string): string {
   switch (code) {
@@ -717,10 +744,7 @@ function TopChrome({
   userPaused: boolean;
   softPauseUntil: number | null;
   modalOpen: boolean;
-  principal:
-    | { kind: 'parent'; name: string }
-    | { kind: 'kid'; name: string; color: string }
-    | null;
+  principal: Principal | null;
   onExit: () => void;
   onPause: () => void;
 }) {
@@ -851,8 +875,7 @@ function TopChrome({
               aria-hidden
               className="grid h-7 w-7 place-items-center rounded-full text-[10px] font-extrabold text-white shadow-paper-sm sm:h-8 sm:w-8 sm:text-xs"
               style={{
-                backgroundColor:
-                  principal.kind === 'kid' ? principal.color : '#3253D7',
+                backgroundColor: principal.color,
               }}
             >
               {principal.name.charAt(0).toUpperCase()}
@@ -974,9 +997,21 @@ function HeroSlide({
 
 function AvailableSlide({
   instances,
+  kids,
+  parents,
+  claimant,
+  memberLookup,
+  onChooseClaimant,
+  onClearClaimant,
   onClaim,
 }: {
   instances: BoardInstance[];
+  kids: BoardResponse['kids'];
+  parents: BoardResponse['parents'];
+  claimant: ResolvedIdentity | null;
+  memberLookup: ReturnType<typeof rollupByKey>;
+  onChooseClaimant: (scope?: IdentityScope) => void;
+  onClearClaimant: () => void;
   onClaim: (i: BoardInstance) => void;
 }) {
   const items = useMemo(
@@ -996,7 +1031,7 @@ function AvailableSlide({
     <section className="relative flex flex-1 flex-col gap-8 px-8 py-12 sm:px-12 lg:gap-10 lg:px-20 lg:py-16">
       <SlideHeader
         eyebrow="UP FOR GRABS"
-        title="Pick a chore"
+        title={claimant ? 'Pick a chore' : 'Tap your face first'}
         right={
           <div className="flex items-center gap-2">
             {overdueCount > 0 && (
@@ -1005,14 +1040,28 @@ function AvailableSlide({
               </span>
             )}
             <span className="inline-flex items-center gap-2 rounded-full bg-cream-50/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-cream-50 ring-1 ring-cream-50/20 sm:text-sm">
-              <span aria-hidden>👆</span> Tap to claim
+              <span aria-hidden>👆</span>{' '}
+              {claimant ? 'Tap a chore to claim' : 'Choose who you are'}
             </span>
           </div>
         }
       />
+      <ClaimantChooser
+        kids={kids}
+        parents={parents}
+        claimant={claimant}
+        memberLookup={memberLookup}
+        onChoose={onChooseClaimant}
+        onClear={onClearClaimant}
+      />
       <div className="grid flex-1 auto-rows-min gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 lg:gap-6 2xl:grid-cols-4">
         {items.map((i) => (
-          <ClaimTile key={i.id} instance={i} onTap={() => onClaim(i)} />
+          <ClaimTile
+            key={i.id}
+            instance={i}
+            disabled={!claimant}
+            onTap={() => onClaim(i)}
+          />
         ))}
         {items.length === 0 && (
           <div className="col-span-full grid place-items-center rounded-3xl bg-cream-50/5 px-6 py-16 text-center text-cream-50/65 ring-1 ring-cream-50/10">
@@ -1032,11 +1081,100 @@ function AvailableSlide({
   );
 }
 
+function ClaimantChooser({
+  kids,
+  parents,
+  claimant,
+  memberLookup,
+  onChoose,
+  onClear,
+}: {
+  kids: BoardResponse['kids'];
+  parents: BoardResponse['parents'];
+  claimant: ResolvedIdentity | null;
+  memberLookup: ReturnType<typeof rollupByKey>;
+  onChoose: (scope?: IdentityScope) => void;
+  onClear: () => void;
+}) {
+  const selected =
+    claimant?.memberType === 'kid'
+      ? kids.find((k) => k.id === claimant.memberId)
+      : claimant?.memberType === 'user'
+        ? parents.find((p) => p.id === claimant.memberId)
+        : null;
+
+  return (
+    <div className="rounded-3xl bg-cream-50/8 p-4 ring-1 ring-cream-50/15 backdrop-blur sm:p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-[0.28em] text-cream-50/55 sm:text-xs">
+            Step 1
+          </div>
+          <div className="font-display text-xl font-extrabold text-cream-50 sm:text-2xl">
+            {selected ? `${selected.name} is claiming` : 'Who are you?'}
+          </div>
+        </div>
+        {selected ? (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-full bg-cream-50/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-cream-50 ring-1 ring-cream-50/20 transition hover:bg-cream-50/20 sm:text-sm"
+          >
+            Change
+          </button>
+        ) : (
+          <span className="text-xs font-semibold text-cream-50/60 sm:text-sm">
+            Tap your icon before choosing a chore.
+          </span>
+        )}
+      </div>
+      <div className="flex gap-3 overflow-x-auto pb-1">
+        {[...kids.map((m) => ({ type: 'kid' as const, member: m })), ...parents.map((m) => ({ type: 'user' as const, member: m }))].map(({ type, member }) => {
+          const active =
+            claimant?.memberType === type && claimant.memberId === member.id;
+          const rollup = memberLookup.get(type, member.id);
+          return (
+            <button
+              key={`${type}:${member.id}`}
+              type="button"
+              onClick={() => onChoose({ memberType: type, memberId: member.id })}
+              className={`flex min-w-[8rem] flex-col items-center gap-2 rounded-2xl px-4 py-3 text-center ring-1 transition active:translate-y-px sm:min-w-[9rem] ${
+                active
+                  ? 'bg-money/25 ring-money'
+                  : 'bg-cream-50/6 ring-cream-50/15 hover:bg-cream-50/12 hover:ring-cream-50/30'
+              }`}
+            >
+              <MemberAvatar
+                name={member.name}
+                color={member.color}
+                size="lg"
+                level={rollup?.stats.level ?? null}
+                gender={rollup?.member.displayGender}
+                showLevelChip={false}
+              />
+              <span className="max-w-full truncate font-display text-base font-extrabold text-cream-50 sm:text-lg">
+                {member.name}
+              </span>
+              {active && (
+                <span className="rounded-full bg-money px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                  Me
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ClaimTile({
   instance,
+  disabled,
   onTap,
 }: {
   instance: BoardInstance;
+  disabled: boolean;
   onTap: () => void;
 }) {
   const dueLabel = instance.dueAt
@@ -1049,9 +1187,10 @@ function ClaimTile({
     <button
       type="button"
       onClick={onTap}
+      disabled={disabled}
       className={`group flex flex-col items-start gap-4 rounded-3xl bg-cream-50/8 p-5 text-left ring-1 ring-cream-50/15 backdrop-blur transition active:translate-y-px hover:-translate-y-1 hover:bg-cream-50/15 hover:ring-cream-50/30 lg:p-6 2xl:p-7 ${
         instance.overdue ? 'animate-pulseRed ring-accent-red/50' : ''
-      }`}
+      } ${disabled ? 'cursor-not-allowed opacity-55 hover:translate-y-0 hover:bg-cream-50/8 hover:ring-cream-50/15' : ''}`}
     >
       <div className="flex w-full items-start justify-between gap-3">
         <ChoreIcon name={instance.choreName} size="lg" />
@@ -1083,7 +1222,7 @@ function ClaimTile({
         </div>
       </div>
       <span className="mt-auto inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-cream-50 px-4 py-3 font-display text-sm font-extrabold uppercase tracking-wider text-ink-900 transition group-hover:bg-money group-hover:text-white sm:text-base lg:text-lg">
-        I’ll do this →
+        {disabled ? 'Choose your face first' : 'I’ll do this →'}
       </span>
     </button>
   );
@@ -1109,7 +1248,7 @@ function DoingSlide({
   );
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
-  for (const p of parents) lookup.set(`user:${p.id}`, { name: p.name });
+  for (const p of parents) lookup.set(`user:${p.id}`, { name: p.name, color: p.color });
 
   return (
     <section className="relative flex flex-1 flex-col gap-8 px-8 py-12 sm:px-12 lg:gap-10 lg:px-20 lg:py-16">
@@ -1235,7 +1374,7 @@ function ApprovalsSlide({
   );
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
-  for (const p of parents) lookup.set(`user:${p.id}`, { name: p.name });
+  for (const p of parents) lookup.set(`user:${p.id}`, { name: p.name, color: p.color });
 
   return (
     <section className="relative flex flex-1 flex-col gap-8 px-8 py-12 sm:px-12 lg:gap-10 lg:px-20 lg:py-16">
@@ -1380,7 +1519,14 @@ function LeaderboardSlide({
             <span className="w-10 text-right font-display text-3xl font-extrabold tabular-nums text-cream-50/40 sm:text-4xl lg:w-16 lg:text-6xl">
               {i + 1}
             </span>
-            <MemberAvatar name={e.name} color={e.color} size="xl" />
+            <MemberAvatar
+              name={e.name}
+              color={e.color}
+              size="xl"
+              level={rollup?.stats.level ?? null}
+              gender={rollup?.member.displayGender}
+              glow
+            />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline justify-between gap-3">
                 <span className="flex flex-wrap items-center gap-3 truncate font-display text-2xl font-extrabold sm:text-3xl lg:text-5xl">
@@ -1431,7 +1577,7 @@ function TodaySlide({ board }: { board: BoardResponse }) {
   const total = approved.reduce((acc, i) => acc + i.amountCents, 0);
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of board.kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
-  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name });
+  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name, color: p.color });
 
   return (
     <section className="relative flex flex-1 flex-col gap-8 px-8 py-12 sm:px-12 lg:gap-10 lg:px-20 lg:py-16">
@@ -1525,7 +1671,7 @@ function GoalsSlide({
 }) {
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of board.kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
-  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name });
+  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name, color: p.color });
 
   // Sort: active goals by percent desc, hit goals after.
   const sorted = [...goals].sort((a, b) => {
@@ -1627,7 +1773,14 @@ function StreaksSlide({ rollup }: { rollup: MemberRollup[] }) {
               key={`${r.member.type}:${r.member.id}`}
               className="flex items-center gap-5 rounded-3xl bg-cream-50/8 p-6 ring-1 ring-cream-50/15 backdrop-blur lg:p-8"
             >
-              <MemberAvatar name={r.member.name} color={accent} size="2xl" />
+              <MemberAvatar
+                name={r.member.name}
+                color={accent}
+                size="2xl"
+                level={r.stats.level}
+                gender={r.member.displayGender}
+                glow
+              />
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-cream-50/55">
                   Daily streak
@@ -1708,7 +1861,7 @@ function ChampionSlide({
   if (!lastClosed) return null;
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of board.kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
-  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name });
+  for (const p of board.parents) lookup.set(`user:${p.id}`, { name: p.name, color: p.color });
   const championKey = `${lastClosed.championMemberType}:${lastClosed.championMemberId}`;
   const champion = lookup.get(championKey);
   if (!champion) return null;

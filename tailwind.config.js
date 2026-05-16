@@ -104,6 +104,38 @@ export default {
           '0%': { backgroundPosition: '-200% 0' },
           '100%': { backgroundPosition: '200% 0' },
         },
+        // Soft breathing aura behind a tier portrait. Tier colour is fed
+        // through a CSS variable (`--tier-glow`) so a single keyframe
+        // animates every tier with its own hue. Used on Hero portrait.
+        tierGlow: {
+          '0%, 100%': {
+            opacity: '0.55',
+            transform: 'scale(0.96)',
+          },
+          '50%': {
+            opacity: '1',
+            transform: 'scale(1.06)',
+          },
+        },
+        // One-shot celebration burst when a member levels up. The
+        // overlay scales in, flashes the tier ring, then settles.
+        levelUpBurst: {
+          '0%': { transform: 'scale(0.6)', opacity: '0' },
+          '40%': { transform: 'scale(1.08)', opacity: '1' },
+          '70%': { transform: 'scale(0.98)' },
+          '100%': { transform: 'scale(1)', opacity: '1' },
+        },
+        // Sun-ray spokes rotating behind a level-up portrait.
+        rayRotate: {
+          from: { transform: 'rotate(0deg)' },
+          to: { transform: 'rotate(360deg)' },
+        },
+        // Subtle idle breathing for the hero portrait itself so a
+        // static PNG doesn't feel dead on the page.
+        portraitBreath: {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-4px)' },
+        },
       },
       animation: {
         pulseRed: 'pulseRed 1.4s ease-out infinite',
@@ -112,6 +144,10 @@ export default {
         crownBob: 'crownBob 2.6s ease-in-out infinite',
         pop: 'pop 280ms cubic-bezier(.18,.89,.32,1.28)',
         shimmer: 'shimmer 1.6s linear infinite',
+        tierGlow: 'tierGlow 3.6s ease-in-out infinite',
+        levelUpBurst: 'levelUpBurst 700ms cubic-bezier(.18,.89,.32,1.28)',
+        rayRotate: 'rayRotate 18s linear infinite',
+        portraitBreath: 'portraitBreath 5.5s ease-in-out infinite',
       },
       fontFamily: {
         sans: ['"Inter Tight"', 'Inter', 'system-ui', 'sans-serif'],

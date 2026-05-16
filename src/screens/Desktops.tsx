@@ -10,7 +10,9 @@ import { FamilyDashboard } from '../desktops/FamilyDashboard';
 import { BudgetDesktop } from '../desktops/BudgetDesktop';
 import { MemberDashboard } from '../desktops/MemberDashboard';
 import { CalendarDesktop } from '../desktops/CalendarDesktop';
+import { HistoryDesktop } from '../desktops/HistoryDesktop';
 import { ChampionBanner } from '../ui/ChampionBanner';
+import { LevelUpCelebrator } from '../ui/LevelUpCelebrator';
 import { MilestoneBanner } from '../ui/MilestoneBanner';
 import { MemberAvatar, PageTag, Wordmark } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
@@ -21,7 +23,15 @@ type Desktop =
   | { kind: 'family' }
   | { kind: 'budget' }
   | { kind: 'calendar' }
-  | { kind: 'member'; type: 'user' | 'kid'; id: string; name: string; color?: string };
+  | { kind: 'history' }
+  | {
+      kind: 'member';
+      type: 'user' | 'kid';
+      id: string;
+      name: string;
+      color?: string;
+      gender?: import('../lib/types').StatedGender;
+    };
 
 export function Desktops() {
   const session = useSession();
@@ -49,13 +59,28 @@ export function Desktops() {
       { kind: 'family' },
       { kind: 'budget' },
       { kind: 'calendar' },
+      { kind: 'history' },
     ];
     if (board.data) {
       for (const k of board.data.kids) {
-        list.push({ kind: 'member', type: 'kid', id: k.id, name: k.name, color: k.color });
+        list.push({
+          kind: 'member',
+          type: 'kid',
+          id: k.id,
+          name: k.name,
+          color: k.color,
+          gender: k.gender,
+        });
       }
       for (const u of board.data.parents) {
-        list.push({ kind: 'member', type: 'user', id: u.id, name: u.name });
+        list.push({
+          kind: 'member',
+          type: 'user',
+          id: u.id,
+          name: u.name,
+          color: u.color,
+          gender: u.gender,
+        });
       }
     }
     return list;
@@ -183,6 +208,7 @@ export function Desktops() {
     if (desktop.kind === 'family') return { label: 'AMBIENT TV', title: 'Family dashboard' };
     if (desktop.kind === 'budget') return { label: 'BUDGET', title: 'Pocket money goals' };
     if (desktop.kind === 'calendar') return { label: 'CALENDAR', title: 'Family canvas' };
+    if (desktop.kind === 'history') return { label: 'HISTORY', title: 'The story so far' };
     return { label: 'MEMBER', title: `Member dashboard · ${desktop.name}` };
   })();
 
@@ -234,6 +260,9 @@ export function Desktops() {
         {desktop?.kind === 'calendar' && (
           <CalendarDesktop family={board.data?.family} />
         )}
+        {desktop?.kind === 'history' && (
+          <HistoryDesktop board={board.data} />
+        )}
         {desktop?.kind === 'member' && (
           <MemberDashboard
             member={{
@@ -241,6 +270,7 @@ export function Desktops() {
               id: desktop.id,
               name: desktop.name,
               color: desktop.color,
+              gender: desktop.gender,
             }}
             board={board.data}
           />
@@ -248,6 +278,7 @@ export function Desktops() {
       </main>
 
       <ChampionBanner />
+      <LevelUpCelebrator />
       <MilestoneBanner />
 
       <LegalFooter />
@@ -588,6 +619,7 @@ function labelFor(d: Desktop): string {
   if (d.kind === 'family') return 'Family';
   if (d.kind === 'budget') return 'Budget';
   if (d.kind === 'calendar') return 'Calendar';
+  if (d.kind === 'history') return 'History';
   return d.name;
 }
 
@@ -596,5 +628,6 @@ function glyphFor(d: Desktop): string {
   if (d.kind === 'family') return '🏡';
   if (d.kind === 'budget') return '💰';
   if (d.kind === 'calendar') return '📅';
+  if (d.kind === 'history') return '📈';
   return '👤';
 }

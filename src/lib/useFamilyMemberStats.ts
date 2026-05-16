@@ -1,12 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
-import type { BoardResponse, MemberStats, MemberType } from './types';
+import type { BoardResponse, MemberStats, MemberType, StatedGender } from './types';
+import { resolveDisplayGender, type Gender } from './levelTier';
 
 export type Member = {
   type: MemberType;
   id: string;
   name: string;
   color?: string;
+  /** Render-layer gender, already resolved from the member's stated gender. */
+  displayGender: Gender;
+  /** Original stated gender (incl. `'unspecified'`) for forms / settings. */
+  gender: StatedGender;
 };
 
 export type MemberRollup = {
@@ -42,11 +47,16 @@ export function useFamilyMemberStats(board?: BoardResponse) {
           id: k.id,
           name: k.name,
           color: k.color,
+          gender: k.gender,
+          displayGender: resolveDisplayGender(k.gender, `kid:${k.id}`),
         })),
         ...board.parents.map((p) => ({
           type: 'user' as const,
           id: p.id,
           name: p.name,
+          color: p.color,
+          gender: p.gender,
+          displayGender: resolveDisplayGender(p.gender, `user:${p.id}`),
         })),
       ];
       const results = await Promise.all(

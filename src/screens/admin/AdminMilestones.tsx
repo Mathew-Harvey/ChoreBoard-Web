@@ -37,7 +37,7 @@ export function AdminMilestones() {
     for (const k of family.data?.kids ?? [])
       out.push({ type: 'kid', id: k.id, name: k.name, color: k.color });
     for (const u of family.data?.parents ?? [])
-      out.push({ type: 'user', id: u.id, name: u.name });
+      out.push({ type: 'user', id: u.id, name: u.name, color: u.color });
     return out;
   }, [family.data]);
 

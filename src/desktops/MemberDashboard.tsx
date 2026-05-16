@@ -11,7 +11,10 @@ import type {
 } from '../lib/types';
 import { money, relativePast } from '../lib/format';
 import { useSession } from '../lib/session';
+import { resolveDisplayGender } from '../lib/levelTier';
+import type { StatedGender } from '../lib/types';
 import {
+  buildMemberLookup,
   DesktopTitle,
   MemberAvatar,
   PageTag,
@@ -21,6 +24,8 @@ import { AnimatedNumber } from '../ui/AnimatedNumber';
 import { EmptyState } from '../ui/EmptyState';
 import { SkeletonDesktop } from '../ui/Skeleton';
 import { StreakChip } from '../ui/StreakChip';
+import { TierLadder, TierPortrait } from '../ui/LevelAvatar';
+import { tierForLevel } from '../lib/levelTier';
 import { toastError, toastMoney, toastSuccess } from '../ui/Toast';
 import { celebrate } from '../lib/celebrate';
 
@@ -32,7 +37,13 @@ function hexAlpha(hex: string | undefined, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-type Member = { type: 'user' | 'kid'; id: string; name: string; color?: string };
+type Member = {
+  type: 'user' | 'kid';
+  id: string;
+  name: string;
+  color?: string;
+  gender?: StatedGender;
+};
 
 export function MemberDashboard({
   member,
@@ -102,6 +113,7 @@ export function MemberDashboard({
   const canEditGoals = isParent || isMe;
 
   const pendingApproval = (board?.instances ?? []).filter((i) => i.status === 'pending');
+  const memberLookup = board ? buildMemberLookup(board.kids, board.parents) : null;
 
   const myGoals = useMemo(
     () =>
@@ -127,6 +139,12 @@ export function MemberDashboard({
   const recent = statsQ.data?.recent ?? [];
   const badges = statsQ.data?.badges ?? [];
   const accent = member.color ?? '#5B6072';
+  const tier = tierForLevel(stats?.level);
+  // Resolve "rather not say" to a stable m/f portrait for this member.
+  const displayGender = resolveDisplayGender(
+    member.gender,
+    `${member.type}:${member.id}`,
+  );
 
   if (statsQ.isLoading) {
     return <SkeletonDesktop />;
@@ -139,88 +157,121 @@ export function MemberDashboard({
           title={member.name}
           subtitle={
             stats
-              ? `Level ${stats.level} · ${stats.xp.toLocaleString()} XP · 🔥 ${stats.streak}-day streak`
+              ? `${tier.name} · ${stats.xp.toLocaleString()} XP · 🔥 ${stats.streak}-day streak`
               : undefined
           }
           right={<PageTag index={3} label="MEMBER" title={`Member dashboard · ${member.name}`} />}
         />
 
-        {/* Top hero — "trophy room" style. Cover gradient in the member's
-            colour, avatar floats on top, and a row of inline stat chips
-            (streak / level / lifetime) sits alongside the weekly headline. */}
-        <section className="grid gap-4 lg:grid-cols-[1.6fr_1fr] 2xl:gap-6">
+        {/* Top hero — tier portrait on the left, weekly tally + chips on the
+            right. The portrait card uses the *tier* colour as its gradient so
+            the entire panel skins itself to wherever the member is on the
+            journey (slate at Apprentice → violet at Titan). The member's
+            personal accent still shows up in chips and ring details so the
+            family colour-coding never disappears. */}
+        <section className="grid gap-4 lg:grid-cols-[1fr_1.2fr] 2xl:gap-6">
+          {/* Portrait card */}
           <div
-            className="card relative overflow-hidden p-5 sm:p-7 2xl:p-10"
+            className="card relative overflow-hidden p-5 sm:p-6 2xl:p-8"
             style={{
-              backgroundImage: `linear-gradient(135deg, ${hexAlpha(accent, 0.22)} 0%, transparent 60%)`,
+              backgroundImage: `linear-gradient(160deg, ${hexAlpha(tier.color, 0.16)} 0%, ${hexAlpha(
+                accent,
+                0.10,
+              )} 55%, transparent 100%)`,
             }}
           >
-            {/* Decorative blob */}
             <div
               aria-hidden
-              className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full opacity-20 blur-3xl"
-              style={{ backgroundColor: accent }}
+              className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full opacity-25 blur-3xl"
+              style={{ backgroundColor: tier.color }}
             />
-            <div className="relative flex flex-col items-center gap-5 text-center sm:flex-row sm:items-center sm:gap-6 sm:text-left">
-              <MemberAvatar name={member.name} color={accent} size="2xl" />
-              <div className="min-w-0 flex-1">
-                <div className="page-tag mb-1">THIS WEEK</div>
-                <AnimatedNumber
-                  value={stats?.weekCents ?? 0}
-                  format={money}
-                  className="block font-display text-fluid-money font-extrabold tabular-nums tracking-tight text-money"
+            <div className="relative flex flex-col items-center gap-4">
+              {stats ? (
+                <TierPortrait
+                  name={member.name}
+                  level={stats.level}
+                  xp={stats.xp}
+                  intoLevel={stats.intoLevel}
+                  nextLevelAt={stats.nextLevelAt}
+                  gender={displayGender}
                 />
-                {stats && (
-                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-                    <StreakChip
-                      streak={stats.streak}
-                      bestStreak={stats.bestStreak}
-                      size="md"
-                    />
-                    <span
-                      className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 sm:text-sm"
-                      style={{
-                        backgroundColor: hexAlpha(accent, 0.12),
-                        color: accent,
-                        borderColor: hexAlpha(accent, 0.3),
-                      }}
-                    >
-                      ⚡ Level {stats.level}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-ink-900/8 px-3 py-1 text-xs font-bold uppercase tracking-wider text-ink-700 ring-1 ring-ink-900/15 sm:text-sm">
-                      🏅 {stats.badgeCount} badges
-                    </span>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <MemberAvatar name={member.name} color={accent} size="2xl" />
+              )}
             </div>
           </div>
 
-          <div className="card p-5 sm:p-6 2xl:p-7">
-            <header className="mb-3 flex items-baseline justify-between">
-              <h2 className="font-display text-lg font-extrabold sm:text-xl 2xl:text-2xl">
-                Badge case
-              </h2>
-              <span className="text-xs text-ink-500">{badges.length} earned</span>
-            </header>
-            <div className="grid grid-cols-5 gap-2 sm:grid-cols-5 lg:grid-cols-5 2xl:grid-cols-10">
-              {badges.slice(0, 10).map((b) => (
-                <div
-                  key={b.code}
-                  title={`${b.name} · ${b.description}`}
-                  className="aspect-square grid place-items-center rounded-full bg-accent-yellow/20 text-xl ring-2 ring-ink-900 transition hover:scale-105"
-                >
-                  {b.icon ?? '🏅'}
+          {/* Stats column */}
+          <div className="flex flex-col gap-4">
+            <div
+              className="card relative overflow-hidden p-5 sm:p-6 2xl:p-7"
+              style={{
+                backgroundImage: `linear-gradient(135deg, ${hexAlpha(accent, 0.18)} 0%, transparent 65%)`,
+              }}
+            >
+              <div className="page-tag mb-1">THIS WEEK</div>
+              <AnimatedNumber
+                value={stats?.weekCents ?? 0}
+                format={money}
+                className="block font-display text-fluid-money font-extrabold tabular-nums tracking-tight text-money"
+              />
+              {stats && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <StreakChip
+                    streak={stats.streak}
+                    bestStreak={stats.bestStreak}
+                    size="md"
+                  />
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wider ring-1 sm:text-sm"
+                    style={{
+                      backgroundColor: hexAlpha(tier.color, 0.14),
+                      color: tier.color,
+                      borderColor: hexAlpha(tier.color, 0.4),
+                    }}
+                  >
+                    ⚡ Level {stats.level} · {tier.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-ink-900/8 px-3 py-1 text-xs font-bold uppercase tracking-wider text-ink-700 ring-1 ring-ink-900/15 sm:text-sm">
+                    🏅 {stats.badgeCount} badges
+                  </span>
                 </div>
-              ))}
-              {Array.from({ length: Math.max(0, 10 - badges.length) }).map((_, i) => (
-                <div
-                  key={`l-${i}`}
-                  className="aspect-square grid place-items-center rounded-full bg-cream-200/60 text-[10px] uppercase tracking-wider text-ink-400 ring-2 ring-dashed ring-ink-400"
-                >
-                  lock
-                </div>
-              ))}
+              )}
+            </div>
+
+            {stats && (
+              <div className="card p-4 sm:p-5 2xl:p-6">
+                <div className="page-tag mb-3">THE JOURNEY</div>
+                <TierLadder level={stats.level} gender={displayGender} />
+              </div>
+            )}
+
+            <div className="card p-5 sm:p-6 2xl:p-7">
+              <header className="mb-3 flex items-baseline justify-between">
+                <h2 className="font-display text-lg font-extrabold sm:text-xl 2xl:text-2xl">
+                  Badge case
+                </h2>
+                <span className="text-xs text-ink-500">{badges.length} earned</span>
+              </header>
+              <div className="grid grid-cols-5 gap-2 sm:grid-cols-5 lg:grid-cols-5 2xl:grid-cols-10">
+                {badges.slice(0, 10).map((b) => (
+                  <div
+                    key={b.code}
+                    title={`${b.name} · ${b.description}`}
+                    className="aspect-square grid place-items-center rounded-full bg-accent-yellow/20 text-xl ring-2 ring-ink-900 transition hover:scale-105"
+                  >
+                    {b.icon ?? '🏅'}
+                  </div>
+                ))}
+                {Array.from({ length: Math.max(0, 10 - badges.length) }).map((_, i) => (
+                  <div
+                    key={`l-${i}`}
+                    className="aspect-square grid place-items-center rounded-full bg-cream-200/60 text-[10px] uppercase tracking-wider text-ink-400 ring-2 ring-dashed ring-ink-400"
+                  >
+                    lock
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -269,7 +320,7 @@ export function MemberDashboard({
           <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <SmallTile label="Lifetime earned" big={money(stats.lifetimeCents)} sub={`${stats.lifetimeChores} chores`} />
             <SmallTile label="Longest streak" big={`${stats.bestStreak}d`} sub={stats.streak === stats.bestStreak ? 'still going' : `currently ${stats.streak}d`} />
-            <SmallTile label="Level" big={`${stats.level}`} sub={`${stats.xp.toLocaleString()} XP`} />
+            <SmallTile label="Level" big={`${stats.level}`} sub={`${tier.name} · ${stats.xp.toLocaleString()} XP`} />
             <SmallTile label="Badges" big={`${stats.badgeCount}`} sub="case" />
           </section>
         )}
@@ -280,16 +331,40 @@ export function MemberDashboard({
               Approval queue
             </h3>
             <ul className="flex flex-col gap-2">
-              {pendingApproval.map((i) => (
+              {pendingApproval.map((i) => {
+                const submitter =
+                  i.claimedByType && i.claimedById
+                    ? memberLookup?.byKey(i.claimedByType, i.claimedById)
+                    : undefined;
+                return (
                 <li
                   key={i.id}
                   className="flex flex-col items-stretch justify-between gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900 sm:flex-row sm:items-center"
+                  style={
+                    submitter?.color
+                      ? {
+                          borderLeftWidth: 6,
+                          borderLeftStyle: 'solid',
+                          borderLeftColor: submitter.color,
+                        }
+                      : undefined
+                  }
                 >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{i.choreName}</div>
-                    <div className="text-xs text-ink-500">
-                      Done {i.completedAt ? relativePast(i.completedAt) : ''} ·{' '}
-                      {money(i.amountCents)}
+                  <div className="flex min-w-0 items-center gap-3">
+                    {submitter && (
+                      <MemberAvatar
+                        name={submitter.name}
+                        color={submitter.color}
+                        size="sm"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{i.choreName}</div>
+                      <div className="text-xs text-ink-500">
+                        {submitter ? `${submitter.name} · ` : ''}
+                        Done {i.completedAt ? relativePast(i.completedAt) : ''} ·{' '}
+                        {money(i.amountCents)}
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-shrink-0 gap-2">
@@ -314,7 +389,8 @@ export function MemberDashboard({
                     </button>
                   </div>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </section>
         )}
