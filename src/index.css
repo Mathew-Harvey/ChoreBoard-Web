@@ -483,7 +483,7 @@
     scroll-snap-type: x mandatory;
     -webkit-overflow-scrolling: touch;
     padding-bottom: 0.25rem;
-    min-height: 0;
+    min-height: 20rem;
   }
   [data-kanban-lanes] > * {
     scroll-snap-align: start;
@@ -494,7 +494,7 @@
       overflow-x: hidden;
       scroll-snap-type: none;
       padding-bottom: 0;
-      height: 100%;
+      align-items: stretch;
     }
     /* Equal-width lanes that share the row; min-w:0 prevents intrinsic
        child widths from blowing the row out. */
@@ -502,7 +502,6 @@
       flex: 1 1 0;
       min-width: 0;
       width: auto;
-      height: 100%;
     }
   }
   @media (min-width: 1280px) {
@@ -516,8 +515,9 @@
      scrolls. The card list uses a negative-margin trick so the scrollbar
      gutter doesn't clip the card ring. */
   [data-kanban-col-list] {
-    flex: 1 1 0;
-    min-height: 0;
+    flex: 1 1 auto;
+    min-height: 10rem;
+    max-height: min(52vh, 34rem);
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;

@@ -360,7 +360,7 @@ export function KanbanDesktop({
        */}
       <div
         data-kanban-root="1"
-        className="flex h-full flex-col gap-3 overflow-hidden p-3 sm:gap-4 sm:p-5 2xl:gap-6 2xl:p-7"
+        className="flex min-h-full flex-col gap-3 overflow-y-auto p-3 sm:gap-4 sm:p-5 2xl:gap-6 2xl:p-7"
       >
         <div className="mx-auto w-full max-w-[1800px] flex-shrink-0">
           <DesktopTitle
@@ -386,7 +386,7 @@ export function KanbanDesktop({
 
         {/* Row 1 — Available + member lanes. Equal-width on tablet+, with
             horizontal scroll-snap on phones (where 4 columns never fit). */}
-        <div className="mx-auto w-full min-h-0 max-w-[1800px] flex-1">
+        <div className="mx-auto w-full max-w-[1800px] flex-shrink-0">
           <div data-kanban-lanes>
             <AvailableColumn
               instances={board.instances}
