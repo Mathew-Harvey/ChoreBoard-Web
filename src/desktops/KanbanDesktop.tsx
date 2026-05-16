@@ -119,7 +119,22 @@ export function KanbanDesktop({
       // SSE channel still drives the authoritative state — these are vibes.
       const inst = board?.instances?.find?.((i) => i.id === vars.instanceId);
       if (vars.action === 'claim') {
-        toastSuccess('Claimed', inst ? `${inst.choreName} is yours.` : undefined);
+        // We may be claiming on behalf of someone else (kid session dragging
+        // a chore onto Mum's swim lane on the shared tablet), so name the
+        // recipient instead of saying "yours".
+        const target = vars.body as { memberType?: 'user' | 'kid'; memberId?: string } | undefined;
+        const recipientName =
+          target?.memberType === 'kid'
+            ? board?.kids.find((k) => k.id === target.memberId)?.name
+            : target?.memberType === 'user'
+              ? board?.parents.find((p) => p.id === target.memberId)?.name
+              : undefined;
+        const detail = inst
+          ? recipientName
+            ? `${inst.choreName} → ${recipientName}`
+            : inst.choreName
+          : undefined;
+        toastSuccess('Claimed', detail);
       } else if (vars.action === 'unclaim') {
         toastSuccess('Returned to Available');
       } else if (vars.action === 'submit') {
@@ -260,8 +275,11 @@ export function KanbanDesktop({
     const target = e.over.id as string;
 
     if (target === 'col:available') {
-      // Spec §3: kids may un-claim something they own, but only before they
-      // submit. Pending → available is a parent reject path.
+      // Any family member can release a `claimed` card back to Available
+      // (it's an explicit "this is back up for grabs" gesture). Sending a
+      // `pending` card back is effectively a reject and stays parent-only
+      // — a kid session on the shared tablet shouldn't be able to silently
+      // undo someone's "I'm done" without a parent in the loop.
       if (
         inst.status === 'claimed' ||
         (inst.status === 'pending' && isParent)
@@ -273,7 +291,10 @@ export function KanbanDesktop({
     if (target.startsWith('col:member:')) {
       const [, , type, id] = target.split(':');
       if (inst.status === 'available') {
-        if (principal?.kind === 'kid' && (type !== 'kid' || id !== principal.kidId)) return;
+        // The drop target *is* the identity assertion: drag-to-Wife's-lane
+        // on the kitchen tablet claims for Wife even when the tablet is
+        // PIN'd into a kid. The matching guard in /board/claim trusts the
+        // explicit body target for any family member.
         action.mutate({
           instanceId: inst.id,
           action: 'claim',
@@ -284,11 +305,9 @@ export function KanbanDesktop({
     }
     if (target === 'col:pending') {
       if (inst.status === 'claimed') {
-        if (
-          principal?.kind === 'kid' &&
-          (inst.claimedByType !== 'kid' || inst.claimedById !== principal.kidId)
-        )
-          return;
+        // Same logic as above: dragging a claimed card to Pending is the
+        // claimant saying "I'm done", and on the shared family tablet that
+        // can be any family member, not just the currently-PIN'd kid.
         action.mutate({ instanceId: inst.id, action: 'submit' });
       }
       return;
@@ -910,21 +929,18 @@ function CompletedColumn({
 // ---------------------------------------------------------------------------
 
 function canDrag(
-  inst: BoardInstance,
+  _inst: BoardInstance,
   col: Column,
-  isParent: boolean,
-  me: { type: 'user' | 'kid'; id: string } | null,
+  _isParent: boolean,
+  _me: { type: 'user' | 'kid'; id: string } | null,
 ): boolean {
-  if (col.kind === 'completed') return false;
-  if (isParent) return true;
-  if (!me) return false;
-  if (col.kind === 'available') return true;
-  if (col.kind === 'member')
-    return col.memberType === me.type && col.memberId === me.id;
-  if (col.kind === 'pending') {
-    return inst.claimedByType === me.type && inst.claimedById === me.id;
-  }
-  return false;
+  // Completed cards are immutable. Everything else on the board is draggable
+  // from any session — the Kanban is treated as a shared family surface, and
+  // the API checks that the *target* of each action lives in the family
+  // (rather than gating on who's currently PIN'd into the tablet). That
+  // lets a parent on the kitchen wall reach into their own swim lane to
+  // submit work even when a kid is currently signed in.
+  return col.kind !== 'completed';
 }
 
 function DraggableCard({
@@ -1151,34 +1167,29 @@ function CardShell({
   );
 }
 
+// The "I'm done" quick-action mirrors the drag-to-Pending gesture: any
+// signed-in family member can mark any claimed card as submitted from the
+// shared family tablet. The matching `/board/submit` API has the same trust
+// model.
 function canSubmit(
   inst: BoardInstance,
   _isParent: boolean,
   me: { type: 'user' | 'kid'; id: string } | null,
 ): boolean {
-  return (
-    !!me &&
-    inst.status === 'claimed' &&
-    inst.claimedByType === me.type &&
-    inst.claimedById === me.id
-  );
+  return !!me && inst.status === 'claimed';
 }
 
-// A claimed card can be sent back to Available by either:
-//   - any parent (the API allows it), or
-//   - the kid who currently claims it.
-// We deliberately do NOT expose this for `pending` cards: the parent reject
-// flow handles that, and a kid can't unclaim once they've submitted.
+// The "Return to Available" quick-action mirrors drag-to-Available: any
+// signed-in family member can release a `claimed` card. We deliberately do
+// NOT expose this for `pending` cards — the parent reject flow handles that
+// and nobody should be able to silently undo a claimant's "I'm done"
+// without a parent in the loop.
 function canUnclaim(
   inst: BoardInstance,
-  isParent: boolean,
+  _isParent: boolean,
   me: { type: 'user' | 'kid'; id: string } | null,
 ): boolean {
-  if (inst.status !== 'claimed') return false;
-  if (isParent) return true;
-  return (
-    !!me && inst.claimedByType === me.type && inst.claimedById === me.id
-  );
+  return !!me && inst.status === 'claimed';
 }
 
 function EvidenceHint({ instance }: { instance: BoardInstance }) {
