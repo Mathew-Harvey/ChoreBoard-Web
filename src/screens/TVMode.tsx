@@ -355,6 +355,30 @@ export function TVMode({ onExit }: { onExit: () => void }) {
     }
   };
 
+  // Background-tap handler. Sits on the slide stage and only fires when the
+  // tap landed on non-interactive content — interactive slides (claim a
+  // chore, pick your avatar, approve, …) own their own clicks. Without this
+  // guard, an avatar tap on the left third of the screen would also fire
+  // "previous slide", which is the bug we're fixing here.
+  const onStageClick = (e: React.MouseEvent<HTMLElement>) => {
+    // Ignore keyboard-synthesised clicks (Enter / Space on focused element).
+    if (e.detail === 0) return;
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest(
+        'button, a, input, textarea, select, label, [role="button"]',
+      )
+    ) {
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const w = rect.width;
+    const zone: 'l' | 'c' | 'r' =
+      x < w / 4 ? 'l' : x > (3 * w) / 4 ? 'r' : 'c';
+    onZoneTap(zone);
+  };
+
   const total = leaderboard.data?.entries.reduce((acc, e) => acc + e.amountCents, 0) ?? 0;
   const familyName = board.data?.family.name;
 
@@ -387,8 +411,14 @@ export function TVMode({ onExit }: { onExit: () => void }) {
         onPause={() => setPaused((p) => !p)}
       />
 
-      {/* Slide stage with crossfade. */}
-      <main className="relative flex flex-1 items-stretch justify-stretch overflow-hidden">
+      {/* Slide stage with crossfade. Background taps on non-interactive
+          areas navigate / pause the carousel; taps on buttons (claim a
+          chore, pick your avatar, approve, …) always reach those buttons
+          first. */}
+      <main
+        className="relative flex flex-1 items-stretch justify-stretch overflow-hidden"
+        onClick={onStageClick}
+      >
         <SlideStage idKey={slide?.id ?? 'hero'}>
           {slide?.id === 'hero' && (
             <HeroSlide
@@ -489,31 +519,6 @@ export function TVMode({ onExit }: { onExit: () => void }) {
             />
           )}
         </SlideStage>
-
-        {/* Invisible touch zones. They never receive focus so they don't get
-            in the way of keyboard nav, and z-index sits above the slide so
-            taps reliably land. */}
-        <button
-          type="button"
-          aria-label="Previous slide"
-          onClick={() => onZoneTap('l')}
-          className="absolute inset-y-0 left-0 w-1/4 cursor-default focus:outline-none"
-          tabIndex={-1}
-        />
-        <button
-          type="button"
-          aria-label={paused ? 'Resume rotation' : 'Pause rotation'}
-          onClick={() => onZoneTap('c')}
-          className="absolute inset-y-0 left-1/4 right-1/4 cursor-default focus:outline-none"
-          tabIndex={-1}
-        />
-        <button
-          type="button"
-          aria-label="Next slide"
-          onClick={() => onZoneTap('r')}
-          className="absolute inset-y-0 right-0 w-1/4 cursor-default focus:outline-none"
-          tabIndex={-1}
-        />
       </main>
 
       {/* Bottom slide dots — explicit nav for fingers on the wall iPad. */}
