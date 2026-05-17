@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
+import { localeGuess } from '../lib/locale';
 import { Wordmark } from '../ui/primitives';
 
 type Mode = 'login' | 'signup';
@@ -17,6 +18,12 @@ export function AuthScreen() {
   const [timezone] = useState<string>(
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'Australia/Sydney',
   );
+  // Country / currency snapshot from `navigator.language` + timezone. We
+  // post these alongside the signup so the chore-suggestion engine can
+  // pick the right local-currency base rates from the very first second
+  // of the wizard. The values are non-blocking and overridable in
+  // Admin → Family — see `lib/locale.ts` for the detection chain.
+  const [locale] = useState(() => localeGuess());
   // Required at signup. Stored locally so we have a record of when the
   // Owner accepted, until we land a /api/auth endpoint that captures it
   // server-side.
@@ -36,6 +43,12 @@ export function AuthScreen() {
         // Gender stays 'unspecified' at signup — we ask later, on the
         // member dashboard, where the picker has actual context.
         gender: 'unspecified',
+        // Either locale.country / locale.currency is null (e.g. 'en' tag
+        // with no region, no Intl support) or both are set together.
+        // The API treats these as optional and falls back to US/USD if
+        // missing, so passing nulls is safe.
+        ...(locale.country ? { country: locale.country } : {}),
+        ...(locale.currency ? { currency: locale.currency } : {}),
       });
     },
     onSuccess: () => {

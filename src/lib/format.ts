@@ -1,7 +1,53 @@
-const aud = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
+// Currency formatter cache. We build one Intl.NumberFormat per (locale,
+// currency) pair on demand — `Intl.NumberFormat` is reasonably cheap to
+// construct but allocating one per render still shows up in hot tables
+// like the ledger and the leaderboard.
+const FMT_CACHE = new Map<string, Intl.NumberFormat>();
 
-export function money(cents: number): string {
-  return aud.format(cents / 100);
+function localeForCurrency(currency: string): string {
+  // Pick a locale whose formatting conventions match the currency. We
+  // can't just pass `undefined` because, e.g., a US user viewing AUD
+  // amounts would see `A$5.00` rather than `$5.00` — fine for an
+  // exchange-rate widget, but here the family is in AUD-land already
+  // and we want their normal `$5.00`.
+  switch (currency) {
+    case 'AUD':
+      return 'en-AU';
+    case 'NZD':
+      return 'en-NZ';
+    case 'GBP':
+      return 'en-GB';
+    case 'CAD':
+      return 'en-CA';
+    case 'EUR':
+      return 'en-IE';
+    case 'USD':
+    default:
+      return 'en-US';
+  }
+}
+
+function formatterFor(currency: string): Intl.NumberFormat {
+  const key = currency;
+  let f = FMT_CACHE.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat(localeForCurrency(currency), {
+      style: 'currency',
+      currency,
+    });
+    FMT_CACHE.set(key, f);
+  }
+  return f;
+}
+
+/**
+ * Format a cent (or pence / euro-cent) amount for display. `currency`
+ * defaults to AUD because that's what every existing call site has
+ * historically rendered; a future pass through `families.currency` is
+ * what every screen should be using.
+ */
+export function money(cents: number, currency: string = 'AUD'): string {
+  return formatterFor(currency).format(cents / 100);
 }
 
 export function timeUntil(target: Date | string, now: Date = new Date()): string {

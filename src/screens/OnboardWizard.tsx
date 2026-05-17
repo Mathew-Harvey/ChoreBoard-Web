@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
-import type { Family, Kid, PairingIssuance, StatedGender } from '../lib/types';
+import { money } from '../lib/format';
+import { resolveCountry, SUPPORTED_COUNTRIES } from '../lib/locale';
+import type {
+  ChoreSuggestion,
+  ChoreSuggestionsResponse,
+  Family,
+  Kid,
+  PairingIssuance,
+  StatedGender,
+} from '../lib/types';
 import { GenderPicker, MemberAvatar, Wordmark } from '../ui/primitives';
 import { PinPad } from '../ui/PinPad';
 import { toastError, toastSuccess } from '../ui/Toast';
@@ -22,78 +31,36 @@ const COLORS = [
   '#E25CA6',
 ];
 
-/**
- * Five-chore Starter Pack chosen against the rule from the Round-1 brief:
- *   (i) ≥1 daily anchor for day-one approval,
- *   (ii) ≥1 chore a 6-year-old can do unsupervised,
- *   (iii) ≥1 chore a parent will sometimes claim,
- *   (iv) realistic week-one take ≤ AUD 15 for one keen kid,
- *   (v) zero adult-judgement chores.
- *
- * The pack mirrors `defaultCatalog.ts` rows; the wizard inserts each as a
- * fresh chore via POST /api/chores. Parents can later add the rest of the
- * starter library from AdminChores → "Load more chores".
- */
-type StarterChore = {
-  name: string;
-  amountCents: number;
-  cadence:
-    | { kind: 'daily'; times: string[] }
-    | { kind: 'weekly'; days: number[]; time: string };
-  reasonShort: string;
-};
-const STARTER_PACK: StarterChore[] = [
-  {
-    name: 'Empty the dishwasher',
-    amountCents: 100,
-    cadence: { kind: 'daily', times: ['07:00'] },
-    reasonShort: 'Daily anchor — fires on day one.',
-  },
-  {
-    name: 'Make your bed',
-    amountCents: 50,
-    cadence: { kind: 'daily', times: ['09:00'] },
-    reasonShort: 'A 6-year-old can do this unsupervised.',
-  },
-  {
-    name: 'Take out kitchen bin',
-    amountCents: 50,
-    cadence: { kind: 'daily', times: ['19:00'] },
-    reasonShort: 'A second daily anchor in the evening.',
-  },
-  {
-    name: 'Tidy the living room',
-    amountCents: 150,
-    cadence: { kind: 'daily', times: ['17:00'] },
-    reasonShort: 'Whole-family — a parent will sometimes claim this.',
-  },
-  {
-    name: 'Sort & start a load of laundry',
-    amountCents: 200,
-    cadence: { kind: 'weekly', days: [1, 3, 5], time: '08:00' },
-    reasonShort: 'Weekly cadence; usually a parent claims this.',
-  },
-];
-
 type WizardKid = {
   tempId: string;
   name: string;
   pin: string;
   color: string;
   gender: StatedGender;
+  /**
+   * Whole-year age. Drives both the chore catalog filter and the
+   * pricing engine's age multiplier on `GET /api/chores/suggest`.
+   * Parents must pick before continuing past the kids step.
+   */
+  age: number | null;
 };
 
 type WizardState = {
   step: StepId;
-  // Step 1 — Payout day. Defaults match the family record's existing values
-  // so the wizard "confirms" rather than re-asks if the parent already
-  // signed up with the right family timezone.
+  // Step 1 — Payout day + country/currency. Defaults match the family
+  // record's existing values so the wizard "confirms" rather than
+  // re-asks if the parent already signed up with the right family
+  // timezone, country, and currency.
   payoutDay: number;
   payoutTime: string;
   timezone: string;
+  country: string | null;
+  currency: string | null;
   // Step 2 — Kids.
   kids: WizardKid[];
-  // Step 3 — Starter pack picks; default all five on.
+  // Step 3 — Suggested-chore picks keyed by catalog `slug`. Default-on
+  // for every suggestion the API returns; the parent can deselect any
+  // they don't want before we POST them.
   pickedChores: Record<string, boolean>;
   // Step 4 — Pairing code state.
   pairingIssued: PairingIssuance | null;
@@ -105,8 +72,10 @@ function defaultState(family: Family): WizardState {
     payoutDay: family.payoutDay,
     payoutTime: family.payoutTime,
     timezone: family.timezone,
+    country: family.country,
+    currency: family.currency,
     kids: [],
-    pickedChores: Object.fromEntries(STARTER_PACK.map((c) => [c.name, true])),
+    pickedChores: {},
     pairingIssued: null,
   };
 }
@@ -225,6 +194,8 @@ export function OnboardWizard() {
                       payoutDay: state.payoutDay,
                       payoutTime: state.payoutTime,
                       timezone: state.timezone,
+                      ...(state.country ? { country: state.country } : {}),
+                      ...(state.currency ? { currency: state.currency } : {}),
                     });
                     qc.invalidateQueries({ queryKey: ['family'] });
                     setStep(2);
@@ -253,6 +224,11 @@ export function OnboardWizard() {
                         pin: k.pin,
                         color: k.color,
                         gender: k.gender,
+                        // Age is required to step past this screen, so
+                        // it's safe to assert; the validator will
+                        // 400 if a TypeScript-savvy attacker sends null
+                        // anyway.
+                        age: k.age,
                       });
                     }
                     qc.invalidateQueries({ queryKey: ['family'] });
@@ -272,12 +248,13 @@ export function OnboardWizard() {
                   setState((s) => (s ? { ...s, pickedChores } : s))
                 }
                 onBack={() => setStep(2)}
-                onContinue={async () => {
+                onContinue={async (suggestions) => {
                   try {
-                    for (const c of STARTER_PACK) {
-                      if (!state.pickedChores[c.name]) continue;
+                    for (const c of suggestions) {
+                      if (!state.pickedChores[c.slug]) continue;
                       await api.post('/api/chores', {
                         name: c.name,
+                        description: c.description,
                         amountCents: c.amountCents,
                         cadence: c.cadence,
                       });
@@ -353,14 +330,63 @@ function Step1Payout({
   onChange: (patch: Partial<WizardState>) => void;
   onContinue: () => void;
 }) {
+  const [refining, setRefining] = useState(false);
+
+  // First mount only: if the family record doesn't have a country
+  // already, fall back to the locale guess so the dropdown shows
+  // something sensible (e.g. AU for an `en-AU` browser). We DON'T
+  // call resolveCountry({ requestGeolocation: true }) here — the
+  // refine button does that on demand.
+  useEffect(() => {
+    if (state.country && state.currency) return;
+    let cancelled = false;
+    void resolveCountry({ requestGeolocation: false }).then((g) => {
+      if (cancelled) return;
+      onChange({
+        country: state.country ?? g.country,
+        currency: state.currency ?? g.currency,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const refineLocation = async () => {
+    setRefining(true);
+    try {
+      const g = await resolveCountry({ requestGeolocation: true });
+      if (g.country) {
+        onChange({ country: g.country, currency: g.currency });
+        toastSuccess(
+          'Location refined',
+          g.source === 'geolocation'
+            ? 'We used your device location to pick the local currency.'
+            : 'Falling back to your browser language.',
+        );
+      } else {
+        toastError(
+          "Couldn't read your location",
+          'Pick the country manually below — we use it to suggest fair chore prices.',
+        );
+      }
+    } finally {
+      setRefining(false);
+    }
+  };
+
+  const country = state.country ?? '';
+
   return (
     <>
       <h1 className="font-display text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl">
-        When does the week pay out?
+        Payout day &amp; location
       </h1>
       <p className="mt-2 text-sm text-ink-500 sm:text-base">
         We&apos;ll close the week, name a Champion, and snapshot the ledger
-        every week at this time. You can change it later in Admin → Family.
+        at this time. The country tells us how to suggest fair chore
+        prices — anchored to allowance survey data for where you live.
       </p>
 
       <div className="mt-6 flex flex-col gap-5">
@@ -406,10 +432,60 @@ function Step1Payout({
             />
           </div>
         </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <div className="page-tag mb-2">COUNTRY</div>
+            <select
+              className="input"
+              value={country}
+              onChange={(e) => {
+                const code = e.target.value || null;
+                const match = SUPPORTED_COUNTRIES.find((c) => c.code === code);
+                onChange({
+                  country: code,
+                  currency: match ? match.currency : state.currency,
+                });
+              }}
+            >
+              <option value="">Choose your country…</option>
+              {SUPPORTED_COUNTRIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <div className="page-tag mb-2">CURRENCY</div>
+            <input
+              className="input"
+              value={state.currency ?? ''}
+              onChange={(e) =>
+                onChange({ currency: e.target.value.toUpperCase() || null })
+              }
+              placeholder="AUD"
+              maxLength={3}
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn-ghost self-start text-xs"
+          onClick={refineLocation}
+          disabled={refining}
+        >
+          {refining ? 'Asking your device…' : 'Use my device location'}
+        </button>
       </div>
 
       <div className="mt-8 flex justify-end">
-        <button type="button" className="btn-primary" onClick={onContinue}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={onContinue}
+          disabled={!state.country}
+        >
           Continue
         </button>
       </div>
@@ -437,6 +513,7 @@ function Step2Kids({
       pin: '',
       color: COLORS[state.kids.length % COLORS.length] ?? '#3253D7',
       gender: 'unspecified',
+      age: null,
     });
   };
 
@@ -460,7 +537,8 @@ function Step2Kids({
       </h1>
       <p className="mt-2 text-sm text-ink-500 sm:text-base">
         Each kid gets a 4-digit PIN they&apos;ll use on the kitchen tablet.
-        Add at least one to continue.
+        Their age tells us which chores to suggest — a 6-year-old won&apos;t
+        be asked to mow the lawn.
       </p>
 
       <ul className="mt-6 flex flex-col gap-3">
@@ -475,7 +553,10 @@ function Step2Kids({
                 <div className="font-display text-base font-extrabold">
                   {k.name || 'Untitled'}
                 </div>
-                <div className="text-xs text-ink-500">PIN •••• · {k.gender}</div>
+                <div className="text-xs text-ink-500">
+                  PIN •••• · {k.gender}
+                  {k.age != null ? ` · age ${k.age}` : ''}
+                </div>
               </div>
             </div>
             <div className="flex gap-2">
@@ -512,7 +593,13 @@ function Step2Kids({
         <button
           type="button"
           className="btn-primary"
-          disabled={state.kids.length === 0 || !!editing}
+          disabled={
+            state.kids.length === 0 ||
+            !!editing ||
+            // Every kid must have an age before we move on — without
+            // it the suggestions step has nothing to filter on.
+            state.kids.some((k) => k.age == null)
+          }
           onClick={onContinue}
         >
           Continue
@@ -537,9 +624,16 @@ function KidForm({
   const [pin, setPin] = useState(initial.pin);
   const [color, setColor] = useState(initial.color);
   const [gender, setGender] = useState<StatedGender>(initial.gender);
+  const [age, setAge] = useState<number | null>(initial.age);
 
   const dupe = existingPins.includes(pin) && pin.length === 4;
-  const ready = name.trim().length > 0 && pin.length === 4 && !dupe;
+  const ready =
+    name.trim().length > 0 &&
+    pin.length === 4 &&
+    !dupe &&
+    age !== null &&
+    age >= 4 &&
+    age <= 18;
 
   return (
     <div className="mt-4 rounded-xl bg-cream-100 p-4 ring-1 ring-ink-900/10">
@@ -552,6 +646,31 @@ function KidForm({
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Skye"
           />
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="font-semibold text-ink-900">Age</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            className="input"
+            min={4}
+            max={18}
+            value={age ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === '') {
+                setAge(null);
+              } else {
+                const n = Number.parseInt(v, 10);
+                setAge(Number.isFinite(n) ? n : null);
+              }
+            }}
+            placeholder="e.g. 8"
+          />
+          <span className="text-xs text-ink-500">
+            We use this to suggest chores they can actually do.
+          </span>
         </label>
 
         <div>
@@ -597,7 +716,9 @@ function KidForm({
           type="button"
           className="btn-primary"
           disabled={!ready}
-          onClick={() => onSave({ ...initial, name: name.trim(), pin, color, gender })}
+          onClick={() =>
+            onSave({ ...initial, name: name.trim(), pin, color, gender, age })
+          }
         >
           Save kid
         </button>
@@ -615,66 +736,145 @@ function Step3Starter({
   state: WizardState;
   onChange: (next: Record<string, boolean>) => void;
   onBack: () => void;
-  onContinue: () => void;
+  onContinue: (suggestions: ChoreSuggestion[]) => Promise<void>;
 }) {
-  const toggle = (name: string) => {
-    onChange({ ...state.pickedChores, [name]: !state.pickedChores[name] });
+  // Suggestions are fetched server-side based on the kids' ages (just
+  // POSTed in step 2) and the family's country (saved in step 1). The
+  // pricing engine on the API anchors each amount to published
+  // allowance survey data — see `domain/chorePricing.ts` for sources.
+  const ages = useMemo(
+    () => state.kids.map((k) => k.age).filter((a): a is number => typeof a === 'number'),
+    [state.kids],
+  );
+  const ageKey = ages.join(',');
+
+  const suggestQuery = useQuery({
+    queryKey: ['chore-suggestions', ageKey, state.country, state.currency],
+    queryFn: () =>
+      api.get<ChoreSuggestionsResponse>(
+        `/api/chores/suggest?ages=${encodeURIComponent(ageKey)}` +
+          (state.country ? `&country=${encodeURIComponent(state.country)}` : '') +
+          (state.currency ? `&currency=${encodeURIComponent(state.currency)}` : '') +
+          `&total=10`,
+      ),
+    enabled: ages.length > 0,
+    // The wizard's StorageKey persists state.kids across reloads, but
+    // the suggestions are cheap to refetch and tied to those ages.
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const suggestions = suggestQuery.data?.suggestions ?? [];
+  const currency = suggestQuery.data?.currency ?? state.currency ?? 'USD';
+
+  // Default-on every suggestion the first time we get them, but only
+  // for slugs we haven't seen before — we don't want re-fetches to
+  // stomp the parent's deselections.
+  useEffect(() => {
+    if (suggestions.length === 0) return;
+    const next: Record<string, boolean> = { ...state.pickedChores };
+    let changed = false;
+    for (const s of suggestions) {
+      if (!(s.slug in next)) {
+        next[s.slug] = true;
+        changed = true;
+      }
+    }
+    if (changed) onChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestions.length]);
+
+  const toggle = (slug: string) => {
+    onChange({ ...state.pickedChores, [slug]: !state.pickedChores[slug] });
   };
 
-  const chosen = STARTER_PACK.filter((c) => state.pickedChores[c.name]);
+  const chosen = suggestions.filter((c) => state.pickedChores[c.slug]);
+  const totalWeeklyEstimateCents = chosen.reduce((acc, c) => {
+    return acc + estimateWeeklyCents(c);
+  }, 0);
 
   return (
     <>
       <h1 className="font-display text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl">
-        Pick a starter pack
+        Age-appropriate starter pack
       </h1>
       <p className="mt-2 text-sm text-ink-500 sm:text-base">
-        Five chores to start with. You can add more from{' '}
-        <strong>Admin → Chores</strong> later.
+        Hand-picked for{' '}
+        <strong>
+          {ages.length === 1
+            ? `your ${ages[0]}-year-old`
+            : `ages ${[...new Set(ages)].sort((a, b) => a - b).join(' & ')}`}
+        </strong>{' '}
+        from paediatric and parenting bodies (AAP, AACAP, CHOP). Prices
+        are tuned to your country&apos;s allowance norms — uncheck any
+        you don&apos;t want.
       </p>
 
-      <ul className="mt-6 flex flex-col gap-2">
-        {STARTER_PACK.map((c) => {
-          const on = !!state.pickedChores[c.name];
-          return (
-            <li key={c.name}>
-              <button
-                type="button"
-                onClick={() => toggle(c.name)}
-                className={`flex w-full items-center justify-between gap-3 rounded-xl p-3 text-left ring-2 transition ${
-                  on
-                    ? 'bg-paper ring-ink-900 shadow-paper-sm'
-                    : 'bg-cream-100 ring-ink-900/10 hover:bg-cream-50'
-                }`}
-              >
-                <div className="min-w-0">
-                  <div className="font-display text-base font-extrabold text-ink-900">
-                    {c.name}
-                  </div>
-                  <div className="text-xs text-ink-500">{c.reasonShort}</div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="money-amt text-base">
-                    ${(c.amountCents / 100).toFixed(2)}
-                  </span>
-                  <span
-                    className={`grid h-6 w-6 place-items-center rounded-full ring-2 ring-ink-900 ${
-                      on ? 'bg-money text-white' : 'bg-paper text-ink-300'
+      {suggestQuery.isLoading && (
+        <p className="mt-6 text-ink-500">Picking the right chores…</p>
+      )}
+
+      {suggestQuery.isError && (
+        <p className="mt-6 rounded-lg bg-accent-red/10 px-3 py-2 text-sm text-accent-red ring-1 ring-accent-red/30">
+          Couldn&apos;t load suggestions. Click <em>Back</em> and check
+          each kid has an age, or skip to{' '}
+          <strong>Admin → Chores</strong> after onboarding.
+        </p>
+      )}
+
+      {!suggestQuery.isLoading && suggestions.length > 0 && (
+        <>
+          <ul className="mt-6 flex flex-col gap-2">
+            {suggestions.map((c) => {
+              const on = !!state.pickedChores[c.slug];
+              return (
+                <li key={c.slug}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(c.slug)}
+                    className={`flex w-full items-center justify-between gap-3 rounded-xl p-3 text-left ring-2 transition ${
+                      on
+                        ? 'bg-paper ring-ink-900 shadow-paper-sm'
+                        : 'bg-cream-100 ring-ink-900/10 hover:bg-cream-50'
                     }`}
-                    aria-hidden
                   >
-                    {on ? '✓' : ''}
-                  </span>
-                </div>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                    <div className="min-w-0">
+                      <div className="font-display text-base font-extrabold text-ink-900">
+                        {c.name}
+                      </div>
+                      <div className="text-xs text-ink-500">
+                        {c.description}
+                      </div>
+                      <div className="mt-1 text-[11px] uppercase tracking-wider text-ink-400">
+                        ages {c.minAge}-{c.maxAge} · {c.difficulty} ·{' '}
+                        {readableCadenceShort(c.cadence)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="money-amt text-base">
+                        {money(c.amountCents, c.currency)}
+                      </span>
+                      <span
+                        className={`grid h-6 w-6 place-items-center rounded-full ring-2 ring-ink-900 ${
+                          on ? 'bg-money text-white' : 'bg-paper text-ink-300'
+                        }`}
+                        aria-hidden
+                      >
+                        {on ? '✓' : ''}
+                      </span>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
 
-      <p className="mt-3 text-xs text-ink-400">
-        {chosen.length} of {STARTER_PACK.length} picked.
-      </p>
+          <p className="mt-3 text-xs text-ink-400">
+            {chosen.length} of {suggestions.length} picked · est.{' '}
+            <strong>{money(totalWeeklyEstimateCents, currency)}</strong>{' '}
+            per week if every chore is completed.
+          </p>
+        </>
+      )}
 
       <div className="mt-8 flex justify-between gap-3">
         <button type="button" className="btn-ghost" onClick={onBack}>
@@ -684,13 +884,56 @@ function Step3Starter({
           type="button"
           className="btn-primary"
           disabled={chosen.length === 0}
-          onClick={onContinue}
+          onClick={() => onContinue(suggestions)}
         >
           Continue
         </button>
       </div>
     </>
   );
+}
+
+/**
+ * Cadence-aware "weekly take if completed every time" estimate. Used
+ * only in the wizard summary line so a parent eyeballing the starter
+ * pack can sanity-check the total spend.
+ */
+function estimateWeeklyCents(c: ChoreSuggestion): number {
+  switch (c.cadence.kind) {
+    case 'daily':
+      return c.amountCents * 7 * c.cadence.times.length;
+    case 'weekly':
+      return c.amountCents * c.cadence.days.length;
+    case 'every_n_days':
+      return Math.round((c.amountCents * 7) / Math.max(1, c.cadence.n));
+    case 'every_n_weeks':
+      return Math.round(
+        (c.amountCents * c.cadence.days.length) / Math.max(1, c.cadence.n),
+      );
+    case 'monthly_dom':
+    case 'monthly_nth':
+      return Math.round(c.amountCents / 4);
+    default:
+      return c.amountCents;
+  }
+}
+
+function readableCadenceShort(c: ChoreSuggestion['cadence']): string {
+  switch (c.kind) {
+    case 'daily':
+      return c.times.length === 1 ? 'daily' : `${c.times.length}× daily`;
+    case 'weekly':
+      return c.days.length === 7 ? 'every day' : `${c.days.length}× per week`;
+    case 'every_n_days':
+      return `every ${c.n} days`;
+    case 'every_n_weeks':
+      return c.n === 2 ? 'fortnightly' : `every ${c.n} weeks`;
+    case 'monthly_dom':
+    case 'monthly_nth':
+      return 'monthly';
+    default:
+      return '';
+  }
 }
 
 function Step4Pair({

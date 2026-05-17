@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
+import { money } from '../../lib/format';
+import { resolveCountry, SUPPORTED_COUNTRIES } from '../../lib/locale';
 import { useEntitlements, useSession } from '../../lib/session';
 import type {
+  ChoreSuggestion,
+  ChoreSuggestionsResponse,
   DevicePairing,
   Family,
   FamilyInvite,
@@ -202,12 +206,24 @@ export function AdminFamily() {
     pin: string;
     color: string;
     gender: StatedGender;
+    age: number | null;
   }>({
     name: '',
     pin: '',
     color: COLORS[0]!,
     gender: 'unspecified',
+    age: null,
   });
+
+  // After a successful add-kid POST, we open this modal with the freshly
+  // fetched age-appropriate suggestions so the parent can one-tap add
+  // them. Mirrors the wizard's step 3 — same endpoint, same UX
+  // expectations — but lives outside the wizard for parents who add
+  // kids later in the family lifecycle.
+  const [suggestModalKid, setSuggestModalKid] = useState<{
+    name: string;
+    age: number;
+  } | null>(null);
 
   if (fam.isLoading || !fam.data) return <p className="text-ink-500">Loading…</p>;
   const family = fam.data.family;
@@ -270,7 +286,65 @@ export function AdminFamily() {
               }}
             />
           </Field>
+          <Field label="Country (drives chore-price suggestions)">
+            <select
+              className="input"
+              value={family.country ?? ''}
+              onChange={(e) => {
+                const code = e.target.value || null;
+                if (!code) return;
+                const match = SUPPORTED_COUNTRIES.find((c) => c.code === code);
+                update.mutate({
+                  country: code,
+                  // Reset currency to the country default so a parent
+                  // who picks "United Kingdom" doesn't end up with GBP
+                  // amounts displayed as USD.
+                  currency: match?.currency ?? family.currency ?? undefined,
+                });
+              }}
+            >
+              <option value="">Choose…</option>
+              {SUPPORTED_COUNTRIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Currency (ISO 4217)">
+            <input
+              className="input"
+              defaultValue={family.currency ?? ''}
+              maxLength={3}
+              placeholder="AUD"
+              onBlur={(e) => {
+                const v = e.target.value.trim().toUpperCase();
+                if (v && v.length === 3 && v !== family.currency)
+                  update.mutate({ currency: v });
+              }}
+            />
+          </Field>
         </div>
+        <button
+          type="button"
+          className="btn-ghost mt-2 self-start text-xs"
+          onClick={async () => {
+            const g = await resolveCountry({ requestGeolocation: true });
+            if (g.country) {
+              update.mutate({
+                country: g.country,
+                currency: g.currency ?? family.currency ?? undefined,
+              });
+            } else {
+              toastError(
+                "Couldn't read your location",
+                'Pick the country manually above.',
+              );
+            }
+          }}
+        >
+          Detect from this device
+        </button>
         {update.error instanceof ApiError && (
           <p className="mt-3 text-sm text-accent-red">{update.error.message}</p>
         )}
@@ -322,15 +396,34 @@ export function AdminFamily() {
               <div className="row-span-2 flex items-start sm:row-span-1 sm:items-center">
                 <MemberAvatar name={k.name} color={k.color} size="md" />
               </div>
-              <input
-                className="input col-span-1 sm:max-w-xs"
-                defaultValue={k.name}
-                onBlur={(e) => {
-                  if (e.target.value.trim() && e.target.value !== k.name)
-                    patchKid.mutate({ id: k.id, body: { name: e.target.value } });
-                }}
-                aria-label={`${k.name}'s name`}
-              />
+              <div className="col-span-1 flex flex-col gap-2 sm:max-w-md sm:flex-row sm:items-center">
+                <input
+                  className="input grow"
+                  defaultValue={k.name}
+                  onBlur={(e) => {
+                    if (e.target.value.trim() && e.target.value !== k.name)
+                      patchKid.mutate({ id: k.id, body: { name: e.target.value } });
+                  }}
+                  aria-label={`${k.name}'s name`}
+                />
+                <input
+                  type="number"
+                  className="input sm:max-w-[100px]"
+                  min={4}
+                  max={18}
+                  defaultValue={k.age ?? ''}
+                  placeholder="Age"
+                  aria-label={`${k.name}'s age`}
+                  onBlur={(e) => {
+                    const v = e.target.value;
+                    const n = v === '' ? null : Number.parseInt(v, 10);
+                    if (n === null) return;
+                    if (Number.isFinite(n) && n !== k.age) {
+                      patchKid.mutate({ id: k.id, body: { age: n } });
+                    }
+                  }}
+                />
+              </div>
               <button
                 className="btn-danger col-start-3 row-start-1 self-start sm:self-center"
                 onClick={() => {
@@ -401,6 +494,25 @@ export function AdminFamily() {
                 onChange={(e) => setNewKid({ ...newKid, name: e.target.value })}
               />
             </Field>
+            <Field label="Age">
+              <input
+                className="input"
+                type="number"
+                inputMode="numeric"
+                min={4}
+                max={18}
+                value={newKid.age ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const n = v === '' ? null : Number.parseInt(v, 10);
+                  setNewKid({
+                    ...newKid,
+                    age: Number.isFinite(n as number) ? (n as number) : null,
+                  });
+                }}
+                placeholder="e.g. 8"
+              />
+            </Field>
             <Field label="4-digit PIN">
               <input
                 className="input"
@@ -442,6 +554,7 @@ export function AdminFamily() {
             disabled={
               !newKid.name.trim() ||
               !/^\d{4}$/.test(newKid.pin) ||
+              newKid.age == null ||
               createKid.isPending
             }
             onClick={() => {
@@ -452,14 +565,24 @@ export function AdminFamily() {
                 requestUpsell('kids_max');
                 return;
               }
+              const newKidName = newKid.name.trim();
+              const newKidAge = newKid.age;
               createKid.mutate(newKid, {
-                onSuccess: () =>
+                onSuccess: () => {
                   setNewKid({
                     name: '',
                     pin: '',
                     color: COLORS[0]!,
                     gender: 'unspecified',
-                  }),
+                    age: null,
+                  });
+                  // Offer the parent the same age-tailored chore picker
+                  // the wizard shows. Skipping is fine — the kid still
+                  // exists, we just don't seed any chores for them.
+                  if (newKidAge != null) {
+                    setSuggestModalKid({ name: newKidName, age: newKidAge });
+                  }
+                },
               });
             }}
           >
@@ -467,6 +590,14 @@ export function AdminFamily() {
           </button>
         </div>
       </section>
+
+      {suggestModalKid && (
+        <SuggestChoresModal
+          kidName={suggestModalKid.name}
+          age={suggestModalKid.age}
+          onClose={() => setSuggestModalKid(null)}
+        />
+      )}
 
       <section className="card p-5 sm:p-6">
         <h2 className="mb-1 font-display text-xl font-extrabold sm:text-2xl">Parents</h2>
@@ -1031,3 +1162,193 @@ function formatRelative(iso: string): string {
   const d = Math.floor(ms / (24 * 60 * 60_000));
   return d === 1 ? 'yesterday' : `${d} days ago`;
 }
+
+/**
+ * Modal shown immediately after a parent adds a new kid in AdminFamily.
+ * Mirrors the wizard's Step3Starter — fetches age-appropriate chore
+ * suggestions for the *whole* family (so a returning parent who's just
+ * added a 12-yo to a household that already has a 6-yo gets a balanced
+ * mix), priced for the family's country / currency on the API side.
+ *
+ * Skipping is fine — the kid is already in the DB by the time we open
+ * this. We just don't seed any chores.
+ */
+function SuggestChoresModal({
+  kidName,
+  age,
+  onClose,
+}: {
+  kidName: string;
+  age: number;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  // We pass *just* this new kid's age — the API will mix with their
+  // siblings' ages on its own when the request omits `ages`. We send
+  // their age explicitly so the suggestions lean toward the new
+  // arrival; older siblings already have chores from before.
+  const suggestQuery = useQuery({
+    queryKey: ['chore-suggestions', age],
+    queryFn: () =>
+      api.get<ChoreSuggestionsResponse>(
+        `/api/chores/suggest?ages=${age}&total=8`,
+      ),
+  });
+
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [saving, setSaving] = useState(false);
+
+  const suggestions = suggestQuery.data?.suggestions ?? [];
+
+  // Default-on every new suggestion the first time we see it. Guarded
+  // by `suggestions.length` so a re-render with the same query result
+  // doesn't stomp the parent's deselections.
+  useEffect(() => {
+    if (suggestions.length === 0) return;
+    setPicked((prev) => {
+      if (Object.keys(prev).length > 0) return prev;
+      const seed: Record<string, boolean> = {};
+      for (const s of suggestions) seed[s.slug] = true;
+      return seed;
+    });
+  }, [suggestions.length]);
+
+  const chosen = suggestions.filter((s) => picked[s.slug]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      for (const c of chosen) {
+        await api.post('/api/chores', {
+          name: c.name,
+          description: c.description,
+          amountCents: c.amountCents,
+          cadence: c.cadence,
+        });
+      }
+      qc.invalidateQueries({ queryKey: ['chores'] });
+      qc.invalidateQueries({ queryKey: ['board'] });
+      toastSuccess(
+        chosen.length === 1
+          ? '1 chore added'
+          : `${chosen.length} chores added`,
+        `Tailored for ${kidName} (age ${age}).`,
+      );
+      onClose();
+    } catch (err) {
+      if (err instanceof ApiError) toastError("Couldn't save chores", err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-ink-900/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="suggest-chores-title"
+    >
+      <div className="card max-h-[90vh] w-full max-w-lg overflow-hidden p-0">
+        <div className="flex items-start justify-between gap-3 px-5 pt-5 sm:px-6 sm:pt-6">
+          <div>
+            <div className="page-tag mb-1">FOR {kidName.toUpperCase()}</div>
+            <h2
+              id="suggest-chores-title"
+              className="font-display text-xl font-extrabold sm:text-2xl"
+            >
+              Add age-appropriate chores?
+            </h2>
+            <p className="mt-1 text-sm text-ink-500">
+              Hand-picked for a {age}-year-old from paediatric guidance,
+              priced for your country.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-5 pb-2 pt-4 sm:px-6">
+          {suggestQuery.isLoading && (
+            <p className="text-ink-500">Picking the right chores…</p>
+          )}
+          {suggestQuery.isError && (
+            <p className="rounded-lg bg-accent-red/10 px-3 py-2 text-sm text-accent-red ring-1 ring-accent-red/30">
+              Couldn&apos;t load suggestions. You can add chores manually
+              from <strong>Admin → Chores</strong>.
+            </p>
+          )}
+
+          {!suggestQuery.isLoading && suggestions.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {suggestions.map((c) => {
+                const on = !!picked[c.slug];
+                return (
+                  <li key={c.slug}>
+                    <button
+                      type="button"
+                      onClick={() => setPicked({ ...picked, [c.slug]: !on })}
+                      className={`flex w-full items-center justify-between gap-3 rounded-xl p-3 text-left ring-2 transition ${
+                        on
+                          ? 'bg-paper ring-ink-900 shadow-paper-sm'
+                          : 'bg-cream-100 ring-ink-900/10 hover:bg-cream-50'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-display text-base font-extrabold text-ink-900">
+                          {c.name}
+                        </div>
+                        <div className="text-xs text-ink-500">
+                          {c.description}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="money-amt text-base">
+                          {money(c.amountCents, c.currency)}
+                        </span>
+                        <span
+                          className={`grid h-6 w-6 place-items-center rounded-full ring-2 ring-ink-900 ${
+                            on ? 'bg-money text-white' : 'bg-paper text-ink-300'
+                          }`}
+                          aria-hidden
+                        >
+                          {on ? '✓' : ''}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-ink-900/10 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Skip
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={save}
+            disabled={chosen.length === 0 || saving}
+          >
+            {saving
+              ? 'Adding…'
+              : `Add ${chosen.length} ${chosen.length === 1 ? 'chore' : 'chores'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Suppress unused-vars warning when we choose to read but not display
+// suggestion-source citations. They're surfaced via the API for audit.
+void (null as unknown as ChoreSuggestion);

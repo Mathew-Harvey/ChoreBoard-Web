@@ -62,6 +62,10 @@ export type Family = {
   payoutDay: number;
   payoutTime: string;
   timezone: string;
+  /** ISO 3166-1 alpha-2 — drives the chore-suggestion price defaults. */
+  country: string | null;
+  /** ISO 4217 — falls back to the country's default currency on the API. */
+  currency: string | null;
   onboardingCompletedAt: string | null;
   tvCelebrationSound: boolean;
   pairingReminderDismissedAt: string | null;
@@ -91,6 +95,49 @@ export type Kid = {
   color: string;
   avatar?: string | null;
   gender: StatedGender;
+  /**
+   * Whole-year age. Optional because legacy kids inserted before the
+   * age-aware suggestions feature have null ages until a parent edits
+   * them in Admin → Family.
+   */
+  age?: number | null;
+};
+
+/**
+ * Returned by GET /api/chores/suggest. Each item has the catalog metadata
+ * plus an `amountCents` already priced for the family's country / currency
+ * and the youngest in-band kid. The wizard treats this as preview data —
+ * the actual chore is created via POST /api/chores when the parent
+ * confirms.
+ */
+export type ChoreSuggestion = {
+  slug: string;
+  name: string;
+  description: string;
+  difficulty: 'easy' | 'medium' | 'hard';
+  category:
+    | 'self-care'
+    | 'kitchen'
+    | 'cleaning'
+    | 'laundry'
+    | 'pets'
+    | 'yard'
+    | 'meals'
+    | 'family';
+  minAge: number;
+  maxAge: number;
+  cadence: Cadence;
+  amountCents: number;
+  currency: string;
+  priceForAge: number;
+  source: string;
+};
+
+export type ChoreSuggestionsResponse = {
+  suggestions: ChoreSuggestion[];
+  country: string;
+  currency: string;
+  ages: number[];
 };
 export type Parent = {
   id: string;
