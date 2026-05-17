@@ -32,10 +32,23 @@ import lvl4Female from '../assets/avatars/lvl4f.png';
 import lvl5Female from '../assets/avatars/lvl5f.png';
 import lvl6Female from '../assets/avatars/lvl6f.png';
 
-// Per-tier dance clips (VP9 + alpha, ~6s, ~300-650 KB each). One per
-// gender × tier. These are imported as URLs so Vite fingerprints them and
-// the static avatar PNG remains the only thing on the critical path —
-// the video is only fetched once a consumer mounts a <TierDancer>.
+// Per-tier dance clips. One per gender × tier × format.
+//
+// Two formats ship side-by-side because there is no single alpha-channel
+// video container that all of our targets accept:
+//
+//   .webm  - VP9 + alpha (yuva420p, ~6s, 300-650 KB). The first-choice
+//            format for Chromium / Firefox / Edge.
+//
+//   .webp  - Animated WebP with alpha (~600-1400 KB). Used on Apple
+//            WebKit (iPadOS Safari + Capacitor WKWebView), which cannot
+//            decode VP9-alpha WebM — iOS 16 drops the alpha plane, older
+//            iOS fails the source outright. `<TierDancer>` switches to
+//            the WebP at runtime; everyone else stays on the WebM.
+//
+// Both are emitted by `scripts/process-dance-videos.ps1`. Importing as URLs
+// lets Vite fingerprint them and keeps the static avatar PNG the only thing
+// on the critical path — the dance asset is fetched on demand.
 import lvl1MaleDance from '../assets/avatars/video/lvl1dance.webm';
 import lvl2MaleDance from '../assets/avatars/video/lvl2dance.webm';
 import lvl3MaleDance from '../assets/avatars/video/lvl3dance.webm';
@@ -48,6 +61,16 @@ import lvl3FemaleDance from '../assets/avatars/video/lvl3fdance.webm';
 import lvl4FemaleDance from '../assets/avatars/video/lvl4fdance.webm';
 import lvl5FemaleDance from '../assets/avatars/video/lvl5fdance.webm';
 import lvl6FemaleDance from '../assets/avatars/video/lvl6fdance.webm';
+
+// Animated WebP variants — globbed (not statically imported) so the build
+// still succeeds when someone clones the repo before running
+// `scripts/process-dance-videos.ps1`. If a .webp is missing the lookup
+// returns null and the Apple-WebKit fallback in <TierDancer> degrades
+// gracefully to the still portrait.
+const ANIMATED_DANCES = import.meta.glob<string>(
+  '../assets/avatars/video/lvl*dance.webp',
+  { eager: true, query: '?url', import: 'default' },
+);
 
 /**
  * Render-layer gender — what the avatar component actually paints. Always
@@ -220,6 +243,25 @@ export function danceFor(
   const lv = Math.max(1, Math.min(MAX_TIER, level ?? 1));
   const set = DANCES[gender] ?? DANCES.m;
   return set[lv - 1]!;
+}
+
+/**
+ * Animated-WebP URL for the same dance clip — the Apple-WebKit fallback.
+ *
+ * Returns null when the .webp hasn't been generated yet (the
+ * `process-dance-videos.ps1` script emits one alongside each .webm, but a
+ * fresh clone won't have them on disk until the script has been run).
+ * Callers should treat null as "no dance available on this device, use the
+ * still portrait instead".
+ */
+export function animatedDanceFor(
+  level: number | undefined | null,
+  gender: Gender = 'm',
+): string | null {
+  const lv = Math.max(1, Math.min(MAX_TIER, level ?? 1));
+  const suffix = gender === 'f' ? 'f' : '';
+  const key = `../assets/avatars/video/lvl${lv}${suffix}dance.webp`;
+  return ANIMATED_DANCES[key] ?? null;
 }
 
 /**

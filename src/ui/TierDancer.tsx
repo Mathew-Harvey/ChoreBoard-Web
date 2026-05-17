@@ -6,18 +6,37 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
-import { danceFor, portraitFor, type Gender } from '../lib/levelTier';
+import {
+  animatedDanceFor,
+  danceFor,
+  portraitFor,
+  type Gender,
+} from '../lib/levelTier';
 
 // ---------------------------------------------------------------------------
 //  TIER DANCER
 // ---------------------------------------------------------------------------
 //
-// Renders the tier portrait as a static image, with a looping dance video
-// overlaid on top that activates on hover (desktop) or tap (mobile). When
-// the dance is idle the video is paused, `display: none`-ish, and not even
-// fetched (preload="none"), so the only thing on the critical path is the
-// PNG that we already load for every avatar. The video is only requested
-// once the user signals interest.
+// Renders the tier portrait as a static image, with a looping dance overlay
+// on top that activates on hover (desktop) or tap (mobile). When the dance
+// is idle the overlay is gone from the DOM and not even fetched, so the
+// only thing on the critical path is the PNG that we already load for
+// every avatar.
+//
+// We carry the dance in TWO encodings because no single alpha-channel
+// format works everywhere:
+//
+//   * `<video src=".webm">` — VP9 + alpha. The pick on Chromium / Firefox /
+//                              Edge: small files, granular play/pause/
+//                              `onEnded` semantics.
+//   * `<img src=".webp">`   — animated WebP + alpha. The pick on Apple
+//                              WebKit (iPadOS Safari + Capacitor's
+//                              WKWebView), because Safari cannot decode
+//                              VP9-alpha WebM (iOS 16 silently drops the
+//                              alpha plane, older iOS fails the source).
+//                              `<img>` gives us alpha that actually
+//                              renders; we simulate "ended" with a timer
+//                              keyed to the clip duration.
 //
 // Three modes:
 //   - `interactive` (default) — hover/tap to play, returns to still after.
@@ -34,6 +53,33 @@ import { danceFor, portraitFor, type Gender } from '../lib/levelTier';
 // the celebration overlay just shows the still portrait.
 
 type Mode = 'interactive' | 'celebration' | 'auto';
+
+/** Duration of every dance clip, in ms. Both encodings are 6s long (see
+ *  `scripts/process-dance-videos.ps1`). We hard-code it because animated
+ *  WebPs don't expose a JS-readable duration the way `<video>` does, and
+ *  we need it to simulate "ended" for the tap-and-play-once and auto modes. */
+const DANCE_DURATION_MS = 6_000;
+
+/**
+ * True when we're running inside Apple's WebKit — iOS / iPadOS Safari, or
+ * a WKWebView host (Capacitor). These engines cannot decode VP9-alpha
+ * WebM, so we feed them animated WebPs instead.
+ *
+ * iPadOS 13+ Safari spoofs the desktop UA by default, so we also peek at
+ * `maxTouchPoints` to catch iPads pretending to be Macs.
+ */
+const IS_APPLE_WEBKIT: boolean = (() => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const isiOSLike =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+  const isMacSafari =
+    /Macintosh/.test(ua) &&
+    /Safari/.test(ua) &&
+    !/Chrome|CriOS|FxiOS|Edg|OPR/.test(ua);
+  return isiOSLike || isMacSafari;
+})();
 
 type TierDancerProps = {
   level: number;
@@ -83,40 +129,51 @@ export function TierDancer({
 }: TierDancerProps) {
   const portrait = portraitFor(level, gender);
   const dance = danceFor(level, gender);
+  const danceImage = animatedDanceFor(level, gender);
   const reduceMotion = usePrefersReducedMotion();
   const hoverCapable = useHoverCapable();
+
+  // Pick the rendering path once per (level, gender) — WebKit gets the
+  // animated WebP `<img>`; everyone else gets the WebM `<video>`. If
+  // we're on WebKit but the .webp hasn't been generated yet, `useImage`
+  // is true but `danceImage` is null, so we'll degrade to the still.
+  const useImage = IS_APPLE_WEBKIT;
+  const overlaySrc: string | null = useImage ? danceImage : dance;
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // True whenever the video should be visible + playing. For celebration
+  // True whenever the dance should be visible + playing. For celebration
   // mode this is just "always" (modulo reduced-motion). For auto mode it
   // flips to true on mount and falls back to false once the clip ends.
   const [playing, setPlaying] = useState<boolean>(
     mode === 'celebration' || mode === 'auto',
   );
 
-  // True once the video has loaded enough to render its first frame —
-  // we only crossfade the <video> in when this is set, so we never see
-  // an ugly black "loading" flash before the figure appears.
+  // True once the overlay has loaded enough to render its first frame —
+  // we only crossfade it in when this is set, so we never see an ugly
+  // black "loading" flash before the figure appears.
   const [ready, setReady] = useState(false);
 
   // True if the browser couldn't load/decode the dance clip (e.g. an
-  // older browser without VP9 alpha, a network blip, or some exotic
-  // WebView). When set, we permanently fall back to the still portrait
-  // and stop trying — better a frozen hero than a broken square.
+  // older browser without VP9 alpha, a network blip, or — most often —
+  // we're on WebKit and the .webp asset hasn't been encoded yet). When
+  // set, we permanently fall back to the still portrait and stop trying
+  // — better a frozen hero than a broken square.
   const [failed, setFailed] = useState(false);
 
   // If the underlying member changes (level-up, switching dashboards) the
-  // video element gets a new src — reset the loading + failure flags so
-  // the new clip gets a fair shot at loading.
+  // overlay element gets a new src — reset the loading + failure flags so
+  // the new clip gets a fair shot at loading. We also pre-fail when the
+  // image path is selected but no .webp exists, so the still shows
+  // immediately instead of after a broken-image flicker.
   useEffect(() => {
     setReady(false);
-    setFailed(false);
-  }, [dance]);
+    setFailed(useImage && !danceImage);
+  }, [overlaySrc, useImage, danceImage]);
 
   // Want to play if (mode requires it) AND (not paused) AND (motion is
-  // OK) AND (video hasn't failed to load).
+  // OK) AND (overlay hasn't failed to load).
   const wantPlay = !paused && !reduceMotion && playing && !failed;
 
   // Stop dancing when scrolled off-screen so we don't waste decode cycles
@@ -140,8 +197,10 @@ export function TierDancer({
 
   // Drive the <video> imperatively. React's declarative play/pause via
   // the `autoPlay` attribute is too coarse (it doesn't re-trigger on
-  // state changes), so we own play/pause ourselves.
+  // state changes), so we own play/pause ourselves. Skipped on the
+  // animated-WebP path since `<img>` animates as long as it's mounted.
   useEffect(() => {
+    if (useImage) return;
     const v = videoRef.current;
     if (!v) return;
     if (wantPlay && onScreen) {
@@ -159,7 +218,7 @@ export function TierDancer({
         }
       }
     }
-  }, [wantPlay, onScreen, mode, ready]);
+  }, [useImage, wantPlay, onScreen, mode, ready]);
 
   // For `auto` mode, fall back to the still after the first loop. Lets us
   // do "wave once when the dashboard mounts" without a perpetual disco.
@@ -171,6 +230,19 @@ export function TierDancer({
       setPlaying(false);
     }
   }, [mode, hoverCapable]);
+
+  // Animated-WebP path: <img> can't fire `onEnded`, so we time the "play
+  // once" modes manually. Celebration and hover-capable interactive both
+  // loop forever (animated WebP auto-loops), no timer needed.
+  useEffect(() => {
+    if (!useImage) return;
+    if (!(wantPlay && onScreen && ready)) return;
+    const needsAutoStop =
+      mode === 'auto' || (mode === 'interactive' && !hoverCapable);
+    if (!needsAutoStop) return;
+    const t = window.setTimeout(() => setPlaying(false), DANCE_DURATION_MS);
+    return () => window.clearTimeout(t);
+  }, [useImage, wantPlay, onScreen, ready, mode, hoverCapable]);
 
   const startDance = useCallback(() => {
     if (mode !== 'interactive' || reduceMotion) return;
@@ -265,43 +337,82 @@ export function TierDancer({
           transition: 'opacity 160ms ease-out',
         }}
       />
-      {/* Dance video, layered absolutely on top. For interactive mode it
-          fades in when ready and playing; for celebration it's always on. */}
-      <video
-        ref={videoRef}
-        src={dance}
-        muted
-        playsInline
-        // Loop while a desktop user is hovering and during celebrations;
-        // for touch (tap-to-play) we want one-shot then back to still.
-        loop={isCelebration || (mode === 'interactive' && hoverCapable) || false}
-        // Don't fetch bytes until the user signals interest (or it's a
-        // celebration / auto mode where we want it immediately).
-        preload={
-          isCelebration || mode === 'auto' || playing ? 'auto' : 'none'
-        }
-        // autoplay attribute is unreliable when the src/loop changes; we
-        // drive play/pause from the effect above. Setting `autoPlay`
-        // here as well covers the celebration first-paint case on some
-        // browsers (notably iOS WKWebView) that ignore `play()` if it
-        // wasn't blessed by an attribute.
-        autoPlay={isCelebration}
-        onCanPlay={() => setReady(true)}
-        onLoadedData={() => setReady(true)}
-        onEnded={handleEnded}
-        onError={() => setFailed(true)}
-        aria-hidden={!isCelebration}
-        draggable={false}
-        className="pointer-events-none absolute inset-0 h-full w-full select-none"
-        style={{
-          opacity: isCelebration ? 1 : wantPlay && ready ? 1 : 0,
-          transition: 'opacity 200ms ease-out',
-          // The portrait sits centred and aspect-preserved inside the
-          // box; the video — at 288xN with alpha — should match.
-          objectFit: 'contain',
-          objectPosition: 'center bottom',
-        }}
-      />
+      {/* Dance overlay, layered absolutely on top. For interactive mode it
+          fades in when ready and playing; for celebration it's always on.
+          Path A (everyone else): a <video> with the WebM VP9-alpha source,
+          driven by the play/pause effect above. Path B (Apple WebKit): an
+          animated WebP <img>, mounted only while a "play" is requested so
+          the animation always restarts from frame 0 on the next hover/tap
+          and we don't keep decoding while idle. */}
+      {useImage
+        ? overlaySrc && (wantPlay || isCelebration) && onScreen
+          ? (
+              <img
+                // `key` forces a fresh <img> on each play so animated WebP
+                // restarts cleanly even when the src URL hasn't changed
+                // (e.g. tap-tap-tap on touch interactive mode).
+                key={`${overlaySrc}:${playing}`}
+                src={overlaySrc}
+                alt=""
+                aria-hidden
+                draggable={false}
+                onLoad={() => setReady(true)}
+                onError={() => setFailed(true)}
+                className="pointer-events-none absolute inset-0 h-full w-full select-none"
+                style={{
+                  opacity: isCelebration ? 1 : ready ? 1 : 0,
+                  transition: 'opacity 200ms ease-out',
+                  // The portrait sits centred and aspect-preserved
+                  // inside the box; the dance — at 288xN with alpha —
+                  // should match.
+                  objectFit: 'contain',
+                  objectPosition: 'center bottom',
+                }}
+              />
+            )
+          : null
+        : (
+            <video
+              ref={videoRef}
+              src={dance}
+              muted
+              playsInline
+              // Loop while a desktop user is hovering and during
+              // celebrations; for touch (tap-to-play) we want one-shot
+              // then back to still.
+              loop={
+                isCelebration || (mode === 'interactive' && hoverCapable) || false
+              }
+              // Don't fetch bytes until the user signals interest (or
+              // it's a celebration / auto mode where we want it
+              // immediately).
+              preload={
+                isCelebration || mode === 'auto' || playing ? 'auto' : 'none'
+              }
+              // autoplay attribute is unreliable when the src/loop
+              // changes; we drive play/pause from the effect above.
+              // Setting `autoPlay` here as well covers the celebration
+              // first-paint case on some browsers that ignore `play()`
+              // if it wasn't blessed by an attribute.
+              autoPlay={isCelebration}
+              onCanPlay={() => setReady(true)}
+              onLoadedData={() => setReady(true)}
+              onEnded={handleEnded}
+              onError={() => setFailed(true)}
+              aria-hidden={!isCelebration}
+              draggable={false}
+              className="pointer-events-none absolute inset-0 h-full w-full select-none"
+              style={{
+                opacity: isCelebration ? 1 : wantPlay && ready ? 1 : 0,
+                transition: 'opacity 200ms ease-out',
+                // The portrait sits centred and aspect-preserved inside
+                // the box; the video — at 288xN with alpha — should
+                // match.
+                objectFit: 'contain',
+                objectPosition: 'center bottom',
+              }}
+            />
+          )}
     </div>
   );
 }
