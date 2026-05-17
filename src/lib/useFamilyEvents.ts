@@ -90,24 +90,6 @@ export function useFamilyEvents(enabled: boolean): void {
         inv(['ledger'], ['member'], ['leaderboard'], ['goals'], ['history']),
       'family.updated': () =>
         inv(['family'], ['board'], ['leaderboard'], ['chores'], ['history']),
-      'whiteboard.created': () => inv(['whiteboards']),
-      'whiteboard.updated': (data) => {
-        inv(['whiteboards']);
-        if (data?.whiteboardId) {
-          qc.invalidateQueries({ queryKey: ['whiteboard', data.whiteboardId] });
-        }
-      },
-      'whiteboard.deleted': () => inv(['whiteboards']),
-      'list.created': () => inv(['lists']),
-      'list.updated': (data) => {
-        inv(['lists']);
-        if (data?.listId) qc.invalidateQueries({ queryKey: ['list', data.listId] });
-      },
-      'list.deleted': () => inv(['lists']),
-      'list.item.changed': (data) => {
-        inv(['lists']);
-        if (data?.listId) qc.invalidateQueries({ queryKey: ['list', data.listId] });
-      },
       'milestone.hit': (data) => {
         inv(['milestones']);
         // Re-broadcast for the celebrate-on-hit toast banner; the listener

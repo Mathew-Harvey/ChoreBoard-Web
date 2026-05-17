@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
-import type { StatedGender } from '../lib/types';
-import { GenderPicker, Wordmark } from '../ui/primitives';
+import { Wordmark } from '../ui/primitives';
 
 type Mode = 'login' | 'signup';
 
@@ -15,9 +14,6 @@ export function AuthScreen() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [familyName, setFamilyName] = useState('');
-  // Default to "rather not say" — picks an alternating m/f portrait so a
-  // member who skips this still gets a personal-feeling avatar.
-  const [gender, setGender] = useState<StatedGender>('unspecified');
   const [timezone] = useState<string>(
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'Australia/Sydney',
   );
@@ -37,7 +33,9 @@ export function AuthScreen() {
         name,
         familyName,
         timezone,
-        gender,
+        // Gender stays 'unspecified' at signup — we ask later, on the
+        // member dashboard, where the picker has actual context.
+        gender: 'unspecified',
       });
     },
     onSuccess: () => {
@@ -142,9 +140,6 @@ export function AuthScreen() {
                       required
                       placeholder="e.g. The Donovans"
                     />
-                  </Field>
-                  <Field label="Gender (for your avatar art)">
-                    <GenderPicker value={gender} onChange={setGender} />
                   </Field>
                 </>
               )}

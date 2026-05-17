@@ -444,6 +444,23 @@
     to { width: 100%; }
   }
 
+  /* PR 11 — TV-mode champion ceremony beats. Each is gated by reduced-motion
+     at the React level so we don't need a media query here; if the global
+     base `@media (prefers-reduced-motion: reduce)` rule didn't already
+     squash duration to 0.001ms we'd add explicit overrides. */
+  @keyframes tvChampScale {
+    from { transform: scale(0.6); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+  @keyframes tvCrownDrop {
+    from { transform: translate(-50%, -40px); opacity: 0; }
+    to   { transform: translate(-50%, 0);     opacity: 1; }
+  }
+  @keyframes tvLineReveal {
+    from { transform: translateY(0.75rem); opacity: 0; }
+    to   { transform: translateY(0);       opacity: 1; }
+  }
+
   /* When a Kanban drag is in flight, pulse the droppable lanes so it's
      visually obvious where a card can land. Set by KanbanDesktop on
      dragstart / cleared on dragend. */
@@ -453,6 +470,22 @@
   }
   body[data-dragging='1'] [data-droppable='1'] {
     animation: dragHint 1.4s ease-in-out infinite;
+  }
+
+  /* "Waiting on a parent" — kid-side pending card on the kitchen tablet
+     (PR 7). Yellow ring + a slow, calm outward pulse, distinct from the
+     orange `pill-pending` used on the parent's view (which means "you
+     need to act") and from the red overdue pulse. Reduced-motion users
+     keep the static yellow ring; the pulse stops via the global override
+     in @layer base above. */
+  .card-waiting-parent {
+    @apply ring-accent-yellow;
+    animation: pendingWait 1.8s ease-out infinite;
+  }
+  @keyframes pendingWait {
+    0%   { box-shadow: 0 0 0 0 rgba(232, 177, 42, 0.55); }
+    70%  { box-shadow: 0 0 0 14px rgba(232, 177, 42, 0); }
+    100% { box-shadow: 0 0 0 14px rgba(232, 177, 42, 0); }
   }
 
   /* ---------------------------------------------------------------------
@@ -666,6 +699,17 @@
   }
   [data-tray-item][data-overdue='1'] {
     box-shadow: inset 0 0 0 2px theme('colors.accent.red');
+  }
+  /* Kid principal viewing their own pending card on the kitchen tablet
+     (PR 7). Yellow inset ring + the slow `pendingWait` outer pulse — calm
+     "we're waiting on a grown-up" affordance, distinct from the red overdue
+     ring above and the orange parent-side `pill-pending`. The inline
+     boxShadow set by the React component when a claimer ribbon is present
+     wins, but on tray rows the kid would only see *their own* pending —
+     where no ribbon is rendered — so the override below is sufficient. */
+  [data-tray-item][data-waiting-parent='1'] {
+    box-shadow: inset 0 0 0 2px theme('colors.accent.yellow');
+    animation: pendingWait 1.8s ease-out infinite;
   }
   [data-tray-item] [data-tray-name] {
     flex: 1 1 0;

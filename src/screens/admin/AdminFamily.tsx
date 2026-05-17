@@ -2,9 +2,18 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
-import { useSession } from '../../lib/session';
-import type { Family, FamilyInvite, Kid, Parent, StatedGender } from '../../lib/types';
+import { useEntitlements, useSession } from '../../lib/session';
+import type {
+  DevicePairing,
+  Family,
+  FamilyInvite,
+  Kid,
+  Parent,
+  StatedGender,
+} from '../../lib/types';
 import { GenderPicker, MemberAvatar } from '../../ui/primitives';
+import { PairingCodeModal } from '../../ui/PairingCodeModal';
+import { requestUpsell } from '../../ui/PlanUpsellSheet';
 import { toastError, toastSuccess } from '../../ui/Toast';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -26,6 +35,7 @@ export function AdminFamily() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const session = useSession();
+  const entitlements = useEntitlements();
   const fam = useQuery({
     queryKey: ['family'],
     queryFn: () =>
@@ -46,9 +56,20 @@ export function AdminFamily() {
     mutationFn: (body: any) => api.post('/api/family/kids', body),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['family'] });
+      qc.invalidateQueries({ queryKey: ['session'] });
       toastSuccess('Kid added', vars.name);
     },
     onError: (err) => {
+      // Server-side 402 is the fallback path when the SPA's entitlements
+      // cache was stale (e.g. another parent in another tab just added a
+      // kid). Surface the same upsell sheet rather than a raw error toast.
+      if (err instanceof ApiError && err.status === 402) {
+        const blockedBy =
+          (err.payload as { blockedBy?: 'kids_max' | 'parents_max' })?.blockedBy ??
+          'kids_max';
+        requestUpsell(blockedBy);
+        return;
+      }
       if (err instanceof ApiError) toastError('Couldn’t add kid', err.message);
     },
   });
@@ -253,6 +274,41 @@ export function AdminFamily() {
         {update.error instanceof ApiError && (
           <p className="mt-3 text-sm text-accent-red">{update.error.message}</p>
         )}
+
+        {/* TV-mode champion-of-the-week chime toggle (PR 11). Default true.
+            The same value is read by the ceremony in ChampionBanner.tsx; a
+            change here propagates via the family.updated SSE event. */}
+        <div className="mt-5 flex items-start justify-between gap-3 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900/10">
+          <div>
+            <div className="font-semibold text-ink-900">
+              Champion celebration sound
+            </div>
+            <div className="text-xs text-ink-500">
+              On Sunday payout, the kitchen-wall TV plays a short chime when
+              the champion is announced. Turn it off if your kitchen runs on
+              quiet hours.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={family.tvCelebrationSound}
+            aria-label="Champion celebration sound"
+            onClick={() =>
+              update.mutate({ tvCelebrationSound: !family.tvCelebrationSound })
+            }
+            className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full ring-2 ring-ink-900 transition ${
+              family.tvCelebrationSound ? 'bg-money' : 'bg-cream-200'
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`inline-block h-5 w-5 rounded-full bg-paper shadow-paper-sm transition ${
+                family.tvCelebrationSound ? 'translate-x-6' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </div>
       </section>
 
       <section className="card p-5 sm:p-6">
@@ -389,6 +445,13 @@ export function AdminFamily() {
               createKid.isPending
             }
             onClick={() => {
+              // Pre-empt the 402: if the family is at the free-tier kid
+              // ceiling already, open the upsell sheet instead of letting
+              // the parent submit a form they can't get through.
+              if (entitlements.data && entitlements.data.remaining.kids <= 0) {
+                requestUpsell('kids_max');
+                return;
+              }
               createKid.mutate(newKid, {
                 onSuccess: () =>
                   setNewKid({
@@ -513,13 +576,26 @@ export function AdminFamily() {
           <CoParentInviter
             invite={invite.data?.invite ?? null}
             isLoading={invite.isLoading}
-            onCreate={() => createInvite.mutate()}
+            onCreate={() => {
+              // The invite link itself is fine to mint — the gate is on
+              // *acceptance* server-side — but if the family already has
+              // its one allowed parent on the free plan, we surface the
+              // upsell here so the joiner doesn't run into a 402 they can't
+              // explain. This keeps the upsell story honest at every door.
+              if (entitlements.data && entitlements.data.remaining.parents <= 0) {
+                requestUpsell('parents_max');
+                return;
+              }
+              createInvite.mutate();
+            }}
             onRevoke={(id) => revokeInvite.mutate(id)}
             isCreating={createInvite.isPending}
             isRevoking={revokeInvite.isPending}
           />
         )}
       </section>
+
+      <PairedDevicesPanel />
 
       {session.data?.kind === 'parent' && (
         <DangerZone
@@ -744,4 +820,214 @@ function CoParentInviter({
       )}
     </div>
   );
+}
+
+/**
+ * "Paired devices" panel — lists every kitchen tablet (or other shared
+ * family device) that consumed a pairing code. Lets any parent generate a
+ * fresh code, rename a device label, or revoke a pairing (which deletes
+ * the device session and forces the device back to the unpaired state).
+ *
+ * This is the only place a parent can dismiss the sticky "Pair a kitchen
+ * tablet" reminder banner that lives above the Kanban (PR 9). The dismiss
+ * link only appears when zero devices are paired so far.
+ */
+function PairedDevicesPanel() {
+  const qc = useQueryClient();
+  const [showCodeModal, setShowCodeModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState('');
+
+  const list = useQuery({
+    queryKey: ['device-pairings'],
+    queryFn: () =>
+      api.get<{ pairings: DevicePairing[] }>('/api/family/pairings').then((r) => r.pairings),
+  });
+
+  const rename = useMutation({
+    mutationFn: ({ id, deviceLabel }: { id: string; deviceLabel: string }) =>
+      api.patch(`/api/family/pairings/${id}`, { deviceLabel }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['device-pairings'] });
+      setEditingId(null);
+      toastSuccess('Renamed');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError("Couldn't rename", err.message);
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: (id: string) => api.delete(`/api/family/pairings/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['device-pairings'] });
+      toastSuccess('Pairing revoked');
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) toastError("Couldn't revoke", err.message);
+    },
+  });
+
+  const dismissBanner = useMutation({
+    mutationFn: () =>
+      api.patch('/api/family', {
+        // Server stamps this column with `now()` when it sees the value
+        // arrive (route accepts a sentinel — see PR 9 wiring).
+        pairingReminderDismissed: true,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['family'] });
+      toastSuccess('Reminder hidden');
+    },
+  });
+
+  const all = list.data ?? [];
+  // Only "active" pairings — the ones currently signed in on a device — are
+  // worth showing as standing rows. Pending/expired/revoked are bookkeeping
+  // and would just clutter the panel.
+  const active = all.filter((p) => p.status === 'active');
+  const hasAny = active.length > 0;
+
+  return (
+    <section id="paired-devices" className="card p-5 sm:p-6">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-xl font-extrabold sm:text-2xl">
+            Paired devices
+          </h2>
+          <p className="mt-1 text-sm text-ink-500">
+            Pair a kitchen tablet so kids can sign in with their PIN. The code
+            is one-time use and expires after 10 minutes.
+          </p>
+        </div>
+        <button className="btn-primary" onClick={() => setShowCodeModal(true)}>
+          Pair a new device
+        </button>
+      </div>
+
+      {list.isLoading && <p className="text-ink-500">Loading…</p>}
+
+      {!list.isLoading && !hasAny && (
+        <div className="rounded-xl bg-cream-100 p-4 text-sm text-ink-500 ring-1 ring-ink-900/10">
+          No devices paired yet. Open <strong>app.choreboard.io/kid</strong>{' '}
+          on the kitchen tablet, then tap <em>Pair a new device</em> above to
+          show a 6-digit code.
+        </div>
+      )}
+
+      {hasAny && (
+        <ul className="flex flex-col gap-3">
+          {active.map((d) => (
+            <li
+              key={d.id}
+              className="flex flex-col gap-3 rounded-xl bg-paper p-3 ring-2 ring-ink-900/15 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                {editingId === d.id ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const trimmed = editingLabel.trim();
+                      if (trimmed) rename.mutate({ id: d.id, deviceLabel: trimmed });
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <input
+                      autoFocus
+                      className="input"
+                      value={editingLabel}
+                      onChange={(e) => setEditingLabel(e.target.value)}
+                      maxLength={64}
+                    />
+                    <button type="submit" className="btn-primary" disabled={rename.isPending}>
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => setEditingId(null)}
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <div className="font-display text-lg font-extrabold text-ink-900">
+                      {d.deviceLabel ?? 'Tablet'}
+                    </div>
+                    <div className="text-xs text-ink-500">
+                      Paired {formatRelative(d.consumedAt ?? d.issuedAt)}
+                      {d.lastSeenAt
+                        ? ` · last seen ${formatRelative(d.lastSeenAt)}`
+                        : ''}
+                    </div>
+                  </>
+                )}
+              </div>
+              {editingId !== d.id && (
+                <div className="flex gap-2">
+                  <button
+                    className="btn-ghost"
+                    onClick={() => {
+                      setEditingId(d.id);
+                      setEditingLabel(d.deviceLabel ?? '');
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="btn-danger"
+                    disabled={revoke.isPending}
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Revoke "${d.deviceLabel ?? 'this device'}"? Kids will need a new pairing code to sign in on it again.`,
+                        )
+                      ) {
+                        revoke.mutate(d.id);
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* The "hide the Kanban reminder" link only shows when the Kanban
+          banner is actually possible (no device paired). Once a device is
+          paired the banner self-clears regardless of dismissal flag, so
+          showing this option there would just be confusing. */}
+      {!hasAny && (
+        <button
+          type="button"
+          onClick={() => dismissBanner.mutate()}
+          disabled={dismissBanner.isPending}
+          className="mt-4 text-xs text-ink-400 hover:text-ink-700 hover:underline"
+        >
+          Hide the &quot;Pair a kitchen tablet&quot; reminder above the board
+        </button>
+      )}
+
+      <PairingCodeModal
+        open={showCodeModal}
+        onClose={() => {
+          setShowCodeModal(false);
+          qc.invalidateQueries({ queryKey: ['device-pairings'] });
+        }}
+      />
+    </section>
+  );
+}
+
+function formatRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return 'just now';
+  if (ms < 60 * 60_000) return `${Math.floor(ms / 60_000)}m ago`;
+  if (ms < 24 * 60 * 60_000) return `${Math.floor(ms / (60 * 60_000))}h ago`;
+  const d = Math.floor(ms / (24 * 60 * 60_000));
+  return d === 1 ? 'yesterday' : `${d} days ago`;
 }

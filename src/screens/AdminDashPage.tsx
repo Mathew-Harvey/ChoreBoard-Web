@@ -40,12 +40,9 @@ type DashPayload = {
     kids: number;
     chores: number;
     completedChores: number;
-    lists: number;
-    whiteboards: number;
     milestones: number;
     milestoneHits: number;
     badgesAwarded: number;
-    listItemsChecked: number;
   };
   activity: {
     signups24h: number;
@@ -61,7 +58,6 @@ type DashPayload = {
   planDistribution: Array<{ plan: string; count: number }>;
   dailySignups: DailyPoint[];
   dailyApplets: DailyPoint[];
-  marketplaceCategories: Array<{ category: string; count: number }>;
   topPublicApplets: Array<{ name: string; icon: string | null; installs: number }>;
   recentSignups: Array<{
     email: string;
@@ -636,8 +632,8 @@ function Dashboard({
         <div className="admin-dash-hero-grid">
           <StatCard label="Workspaces" value={data.totals.workspaces} />
           <StatCard label="Chores completed" value={data.totals.completedChores} />
-          <StatCard label="Lists" value={data.totals.lists} />
-          <StatCard label="Whiteboards" value={data.totals.whiteboards} />
+          <StatCard label="Milestones" value={data.totals.milestones} />
+          <StatCard label="Badges awarded" value={data.totals.badgesAwarded} />
         </div>
       </section>
 
@@ -689,14 +685,6 @@ function Dashboard({
               PLAN_COLOURS[p.plan] ??
               CAT_COLOURS[i % CAT_COLOURS.length] ??
               '#5a5a78',
-          }))}
-        />
-        <DistributionCard
-          title="List categories"
-          items={data.marketplaceCategories.slice(0, 8).map((c, i) => ({
-            label: c.category,
-            count: c.count,
-            colour: CAT_COLOURS[i % CAT_COLOURS.length] ?? '#5a5a78',
           }))}
         />
       </section>

@@ -15,6 +15,7 @@ import { HistoryDesktop } from '../desktops/HistoryDesktop';
 import { ChampionBanner } from '../ui/ChampionBanner';
 import { LevelUpCelebrator } from '../ui/LevelUpCelebrator';
 import { MilestoneBanner } from '../ui/MilestoneBanner';
+import { PlanUpsellSheet } from '../ui/PlanUpsellSheet';
 import { MemberAvatar, PageTag, Wordmark } from '../ui/primitives';
 import { Menu, MenuDivider, MenuItem, MenuLabel } from '../ui/Popover';
 import { TVMode } from './TVMode';
@@ -208,7 +209,7 @@ export function Desktops() {
     if (desktop.kind === 'kanban') return { label: 'KANBAN', title: 'The board' };
     if (desktop.kind === 'family') return { label: 'AMBIENT TV', title: 'Family dashboard' };
     if (desktop.kind === 'budget') return { label: 'BUDGET', title: 'Pocket money goals' };
-    if (desktop.kind === 'calendar') return { label: 'CALENDAR', title: 'Family canvas' };
+    if (desktop.kind === 'calendar') return { label: 'SCHEDULE', title: 'When chores come due' };
     if (desktop.kind === 'history') return { label: 'HISTORY', title: 'The story so far' };
     return { label: 'MEMBER', title: `Member dashboard · ${desktop.name}` };
   })();
@@ -282,6 +283,7 @@ export function Desktops() {
       <ChampionBanner />
       <LevelUpCelebrator />
       <MilestoneBanner />
+      <PlanUpsellSheet />
 
       <LegalFooter />
     </div>
@@ -611,7 +613,7 @@ function labelFor(d: Desktop): string {
   if (d.kind === 'kanban') return 'Board';
   if (d.kind === 'family') return 'Family';
   if (d.kind === 'budget') return 'Budget';
-  if (d.kind === 'calendar') return 'Calendar';
+  if (d.kind === 'calendar') return 'Schedule';
   if (d.kind === 'history') return 'History';
   return d.name;
 }

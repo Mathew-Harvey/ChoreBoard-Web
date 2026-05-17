@@ -21,10 +21,12 @@ import type {
   BoardInstance,
   BoardResponse,
   Chore,
+  DevicePairing,
   Kid,
   LeaderboardResponse,
   Parent,
 } from '../lib/types';
+import { Link } from 'react-router-dom';
 import {
   ChoreIcon,
   DesktopTitle,
@@ -42,6 +44,7 @@ import { AnimatedNumber } from '../ui/AnimatedNumber';
 import { StreakChip } from '../ui/StreakChip';
 import { celebrate } from '../lib/celebrate';
 import { useFamilyMemberStats, rollupByKey } from '../lib/useFamilyMemberStats';
+import { ParentSignInSheet } from '../ui/ParentSignInSheet';
 
 /** Subtle vibrate on touch devices that support it. */
 function tinyHaptic() {
@@ -87,7 +90,20 @@ export function KanbanDesktop({
   });
   const memberStatsQ = useFamilyMemberStats(board);
   const memberStatsLookup = rollupByKey(memberStatsQ.data);
+  // PR 9 — kid-side reminder banner only renders when zero devices are
+  // paired AND the parent hasn't dismissed the reminder yet. Parents see
+  // it on the Kanban (and only on the Kanban — going to Family/History
+  // shouldn't follow them around with the prompt). The query key is shared
+  // with AdminFamily so the banner self-clears the moment a device is paired.
+  const pairings = useQuery({
+    queryKey: ['device-pairings'],
+    queryFn: () =>
+      api.get<{ pairings: DevicePairing[] }>('/api/family/pairings').then((r) => r.pairings),
+    enabled: session.data?.kind === 'parent',
+  });
   const [dragging, setDragging] = useState<BoardInstance | null>(null);
+  // PR 7 — kid-side "Get a parent to approve" → ParentSignInSheet visibility.
+  const [showParentSignIn, setShowParentSignIn] = useState(false);
 
   // Sensor split rationale:
   //   - MouseSensor only listens to mouse events → snappy distance activation
@@ -359,6 +375,12 @@ export function KanbanDesktop({
         data-kanban-root="1"
         className="flex min-h-full flex-col gap-3 overflow-y-auto p-3 sm:gap-4 sm:p-5 2xl:gap-6 2xl:p-7"
       >
+        <PairTabletReminder
+          family={board.family}
+          pairings={pairings.data ?? []}
+          isParent={isParent}
+        />
+
         <div className="mx-auto w-full max-w-[1800px] flex-shrink-0">
           <DesktopTitle
             compact
@@ -423,6 +445,7 @@ export function KanbanDesktop({
             onApprove={(id) => action.mutate({ instanceId: id, action: 'approve' })}
             onReject={(id) => action.mutate({ instanceId: id, action: 'reject' })}
             onApproveAll={approveAll}
+            onGetAParent={!isParent ? () => setShowParentSignIn(true) : undefined}
           />
           <CompletedTrayColumn
             instances={board.instances}
@@ -438,6 +461,26 @@ export function KanbanDesktop({
           </div>
         )}
       </DragOverlay>
+
+      <ParentSignInSheet
+        open={showParentSignIn}
+        context={(() => {
+          const pending = board.instances.filter((i) => i.status === 'pending');
+          if (pending.length === 0) return undefined;
+          if (pending.length === 1) {
+            const inst = pending[0]!;
+            const claimer =
+              inst.claimedByType && inst.claimedById
+                ? lookup.byKey(inst.claimedByType, inst.claimedById)
+                : undefined;
+            return claimer
+              ? `${claimer.name} finished ${inst.choreName}. Approve from here?`
+              : `${inst.choreName} is waiting for approval.`;
+          }
+          return `${pending.length} chores are waiting for approval.`;
+        })()}
+        onCancel={() => setShowParentSignIn(false)}
+      />
 
       {/* Errors flow through the global Toast viewport — see action.onError. */}
     </DndContext>
@@ -885,6 +928,7 @@ function PendingTrayColumn({
   onApprove,
   onReject,
   onApproveAll,
+  onGetAParent,
 }: {
   instances: BoardInstance[];
   isParent: boolean;
@@ -892,6 +936,9 @@ function PendingTrayColumn({
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
   onApproveAll?: () => void;
+  /** Kid-only callback that opens the ParentSignInSheet so a parent
+   *  walking up to the tablet can elevate and approve in place (PR 7). */
+  onGetAParent?: () => void;
 }) {
   const items = useMemo(
     () =>
@@ -948,6 +995,7 @@ function PendingTrayColumn({
                 key={inst.id}
                 instance={inst}
                 claimer={claimer}
+                waitingForParent={!isParent}
                 actions={
                   isParent ? (
                     <div className="flex items-center gap-1.5">
@@ -988,6 +1036,16 @@ function PendingTrayColumn({
           })
         )}
       </div>
+      {!isParent && items.length > 0 && onGetAParent && (
+        <button
+          type="button"
+          onClick={onGetAParent}
+          className="btn-secondary mt-2 w-full !min-h-[44px] text-sm"
+          aria-label="Get a parent to approve these pending chores"
+        >
+          Get a parent to approve →
+        </button>
+      )}
     </section>
   );
 }
@@ -1055,11 +1113,16 @@ function TrayRow({
   claimer,
   actions,
   dimmed,
+  waitingForParent,
 }: {
   instance: BoardInstance;
   claimer?: { name: string; color?: string };
   actions?: ReactNode;
   dimmed?: boolean;
+  /** True when a kid principal is staring at their own pending card on a
+   *  shared family device. Yellow inset ring + slow `pendingWait` pulse,
+   *  defined by `[data-waiting-parent='1']` in index.css. */
+  waitingForParent?: boolean;
 }) {
   const overdue = instance.overdue;
   // When a claimer's accent is set we want both the left-edge color ribbon
@@ -1067,13 +1130,15 @@ function TrayRow({
   // otherwise). The combined inline box-shadow needs to win over the CSS
   // selectors via specificity, so we compose the full shadow string here
   // when a ribbon is in play and let the CSS default render otherwise.
+  // Skip the inline shadow when waitingForParent so the yellow CSS rule wins.
   const ringColor = overdue ? '#DB4646' : 'rgba(16, 24, 43, 0.92)';
   return (
     <div
       data-tray-item=""
       data-overdue={overdue ? '1' : undefined}
+      data-waiting-parent={waitingForParent ? '1' : undefined}
       style={
-        claimer?.color
+        claimer?.color && !waitingForParent
           ? {
               boxShadow: `inset 4px 0 0 0 ${claimer.color}, inset 0 0 0 2px ${ringColor}`,
             }
@@ -1532,5 +1597,63 @@ function CardActionsMenu({
         </div>
       )}
     </Menu>
+  );
+}
+
+/**
+ * "Pair a kitchen tablet" sticky reminder strip. Lives ONLY on the Kanban
+ * (not the Family / History / Schedule desktops) because:
+ *   • The Kanban is the desktop a kid can't reach without sign-in, so the
+ *     prompt is most semantically tied to the screen where the missing
+ *     pairing causes a problem.
+ *   • Showing it on every desktop would feel naggy and dilute the cohesion
+ *     of the rest of the app.
+ *
+ * Visibility:
+ *   • The viewer is a parent (kids never see this).
+ *   • The family has zero paired devices (`pairings.length === 0` filtered
+ *     to active+pending, so revoked / expired entries don't suppress the
+ *     reminder).
+ *   • The parent hasn't dismissed it via AdminFamily → Paired devices.
+ *
+ * Dismissal happens *only* from the AdminFamily panel — there's no "x" on
+ * the banner itself. A casual close shouldn't kill the prompt and undermine
+ * the second-user pillar; the dismissal is a deliberate "I know, leave me
+ * alone" act, lived inside the surface that exposes the actual fix.
+ */
+function PairTabletReminder({
+  family,
+  pairings,
+  isParent,
+}: {
+  family: BoardResponse['family'];
+  pairings: DevicePairing[];
+  isParent: boolean;
+}) {
+  if (!isParent) return null;
+  if (family.pairingReminderDismissedAt) return null;
+  // Only "active" or "pending" pairings count as "we have a paired device" —
+  // a revoked or expired row is bookkeeping, not a working tablet.
+  const hasUsableDevice = pairings.some(
+    (p) => p.status === 'active' || p.status === 'pending',
+  );
+  if (hasUsableDevice) return null;
+
+  return (
+    <div className="mx-auto w-full max-w-[1800px] flex-shrink-0">
+      <Link
+        to="/admin/family#paired-devices"
+        className="flex items-center justify-between gap-3 rounded-xl bg-cream-200 px-4 py-2.5 text-sm font-semibold text-ink-900 ring-2 ring-ink-900/15 transition hover:bg-cream-100 sm:py-3"
+        aria-label="Pair a kitchen tablet"
+      >
+        <span className="flex items-center gap-2">
+          <span aria-hidden className="text-lg">📱</span>
+          <span>Pair a kitchen tablet so kids can sign in too</span>
+        </span>
+        <span aria-hidden className="text-lg leading-none text-ink-500">
+          →
+        </span>
+      </Link>
+    </div>
   );
 }

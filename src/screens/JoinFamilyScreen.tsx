@@ -250,6 +250,13 @@ function explainAcceptError(err: ApiError): string {
   if (err.status === 410) {
     return 'This invite is no longer valid. Ask the owner to send a fresh link.';
   }
+  if (err.status === 402 && err.message === 'plan_upgrade_required') {
+    // The family slipped onto free between issuance and acceptance. We
+    // explain it here rather than emit the global upsell sheet because
+    // the joiner isn't a parent in the family yet — they have nowhere to
+    // pay from. The owner of the family is the actor who needs to upgrade.
+    return 'This family is on the free plan and already has its allowed parent. Ask the owner to upgrade and try again.';
+  }
   return err.message;
 }
 

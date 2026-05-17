@@ -1,44 +1,63 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useSession } from '../lib/session';
 import {
   addMonths,
   buildCalendarGrid,
   dayOfMonth,
   isSameMonth,
   monthLabel,
-  readableDate,
   todayKey,
   type DateKey,
 } from '../lib/calendar';
-import type {
-  Family,
-  ListSummary,
-  Whiteboard,
-  WhiteboardSummary,
-} from '../lib/types';
-import { DesktopTitle } from '../ui/primitives';
-import { toastError, toastSuccess } from '../ui/Toast';
-import { WhiteboardEditor } from './WhiteboardEditor';
-import { ListEditor } from './ListEditor';
+import type { Family, InstanceStatus } from '../lib/types';
+import { ChoreIcon, DesktopTitle } from '../ui/primitives';
 import { money } from '../lib/format';
 
 /**
- * CalendarDesktop
+ * Schedule desktop (PR 10).
  *
- * The primary surface for the "Family canvas" feature. A six-week month grid
- * shows where whiteboard sessions and lists are pinned; tapping a day opens
- * a side sheet with the day's artefacts; tapping any artefact opens the
- * full editor in-place. The whole desktop replaces its main pane with the
- * editor when something is open, so the calendar/topbar chrome stays put.
+ * Replaces the former Calendar+Whiteboards+Lists hybrid with a chore-only
+ * month grid sourced from `GET /api/board/schedule`. Materialised
+ * `chore_instances` are mixed with projected occurrences from the cadence
+ * engine so a parent looking three weeks ahead sees the same rhythm a
+ * day-of materialised instance would have.
+ *
+ * Visual contract from the Round-2 brief:
+ *   • 6×7 month grid, today's cell ringed with `ring-2 ring-ink-900` and a
+ *     small `bg-money` chip on the date number.
+ *   • Each cell stacks up to 4 mini-pills (chore icon + truncated name
+ *     + status dot). Overflow becomes "+N more".
+ *   • Hide-approved toggle defaults OFF; approved chores render at 50%
+ *     opacity by default so the visual payoff of "look at this week's wall
+ *     of green" is preserved (Round-2 reviewer Nit 2).
+ *   • Past-day cells with any unfinished `available` instance get a 2px
+ *     red top border ("overdue surfacing").
+ *   • Tapping a day opens a side sheet with the day's full instance list.
  */
+type ScheduleInstance = {
+  id: string;
+  choreId: string;
+  availableAt: string;
+  dueAt: string | null;
+  status: InstanceStatus;
+  claimedByType: 'user' | 'kid' | null;
+  claimedById: string | null;
+  choreName: string;
+  amountCents: number;
+  projected: boolean;
+};
+
+type ScheduleResponse = {
+  from: string;
+  to: string;
+  timezone: string;
+  days: Record<string, ScheduleInstance[]>;
+};
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
 export function CalendarDesktop({ family }: { family?: Family }) {
-  // Without a loaded family record we'd be silently keying "today" off the
-  // viewer's browser timezone, which is wrong for any parent travelling
-  // outside the family TZ. Render a skeleton until family is in hand, then
-  // mount the real desktop so every cell on the calendar reflects the
-  // family's calendar day from first paint.
   if (!family) {
     return (
       <div className="h-full overflow-y-auto p-4 sm:p-7">
@@ -49,675 +68,274 @@ export function CalendarDesktop({ family }: { family?: Family }) {
       </div>
     );
   }
-  return <CalendarDesktopInner family={family} />;
+  return <ScheduleInner family={family} />;
 }
 
-function CalendarDesktopInner({ family }: { family: Family }) {
-  const qc = useQueryClient();
-  const session = useSession();
+function ScheduleInner({ family }: { family: Family }) {
   const tz = family.timezone;
   const [anchor, setAnchor] = useState<DateKey>(todayKey(tz));
-  const [selected, setSelected] = useState<DateKey>(todayKey(tz));
-  const [daySheetOpen, setDaySheetOpen] = useState(false);
-  const [open, setOpen] = useState<
-    | { kind: 'whiteboard'; id: string }
-    | { kind: 'list'; id: string }
-    | null
-  >(null);
+  const [hideApproved, setHideApproved] = useState(false);
+  const [selected, setSelected] = useState<DateKey | null>(null);
 
-  const grid = useMemo(() => buildCalendarGrid(anchor, 1), [anchor]);
-  const rangeFrom = grid[0]!;
-  const rangeTo = grid[grid.length - 1]!;
+  const grid = useMemo(() => buildCalendarGrid(anchor), [anchor]);
+  const from = grid[0]!;
+  const to = grid[grid.length - 1]!;
 
-  const whiteboards = useQuery({
-    queryKey: ['whiteboards', { from: rangeFrom, to: rangeTo }],
+  const sched = useQuery({
+    queryKey: ['schedule', from, to, tz],
     queryFn: () =>
-      api.get<{ whiteboards: WhiteboardSummary[] }>(
-        `/api/whiteboards?from=${rangeFrom}&to=${rangeTo}&limit=200`,
+      api.get<ScheduleResponse>(
+        `/api/board/schedule?from=${from}&to=${to}`,
       ),
-    staleTime: 10_000,
+    refetchInterval: 5 * 60_000,
   });
-  // We separately pull *all* recent whiteboards (not just the visible month)
-  // so the side rail can show "Recent boards" no matter where you are in the
-  // calendar.
-  const recentBoards = useQuery({
-    queryKey: ['whiteboards', 'recent'],
-    queryFn: () => api.get<{ whiteboards: WhiteboardSummary[] }>(`/api/whiteboards?limit=24`),
-    staleTime: 10_000,
-  });
-
-  const lists = useQuery({
-    queryKey: ['lists', { from: rangeFrom, to: rangeTo }],
-    queryFn: () =>
-      api.get<{ lists: ListSummary[] }>(
-        `/api/lists?from=${rangeFrom}&to=${rangeTo}`,
-      ),
-    staleTime: 10_000,
-  });
-  const recentLists = useQuery({
-    queryKey: ['lists', 'recent'],
-    queryFn: () => api.get<{ lists: ListSummary[] }>(`/api/lists`),
-    staleTime: 10_000,
-  });
-
-  // Quick-lookup: which artefacts live on which day?
-  const byDay = useMemo(() => {
-    const map = new Map<DateKey, { boards: WhiteboardSummary[]; lists: ListSummary[] }>();
-    const ensure = (key: DateKey) => {
-      let v = map.get(key);
-      if (!v) {
-        v = { boards: [], lists: [] };
-        map.set(key, v);
-      }
-      return v;
-    };
-    for (const b of whiteboards.data?.whiteboards ?? []) {
-      if (b.date) ensure(b.date).boards.push(b);
-    }
-    for (const l of lists.data?.lists ?? []) {
-      if (l.date) ensure(l.date).lists.push(l);
-    }
-    return map;
-  }, [whiteboards.data, lists.data]);
-
-  const createBoard = useMutation({
-    mutationFn: (date: DateKey | null) =>
-      api.post<{ whiteboard: Whiteboard }>('/api/whiteboards', {
-        title: `Board · ${date ? readableDate(date) : 'Unscheduled'}`,
-        date,
-        background: 'paper',
-      }),
-    onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ['whiteboards'] });
-      setOpen({ kind: 'whiteboard', id: res.whiteboard.id });
-    },
-    onError: () => toastError('Couldn’t create whiteboard'),
-  });
-  const createList = useMutation({
-    mutationFn: (input: { date: DateKey | null; kind: 'shopping' | 'todo' | 'packing' | 'other' }) =>
-      api.post<{ list: ListSummary }>('/api/lists', {
-        title:
-          input.kind === 'shopping'
-            ? `Shopping · ${input.date ? readableDate(input.date) : 'Unscheduled'}`
-            : input.kind === 'packing'
-              ? `Packing · ${input.date ? readableDate(input.date) : 'Unscheduled'}`
-              : input.kind === 'todo'
-                ? `Todo · ${input.date ? readableDate(input.date) : 'Unscheduled'}`
-                : `List · ${input.date ? readableDate(input.date) : 'Unscheduled'}`,
-        date: input.date,
-        kind: input.kind,
-      }),
-    onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ['lists'] });
-      setOpen({ kind: 'list', id: res.list.id });
-    },
-    onError: () => toastError('Couldn’t create list'),
-  });
-  const deleteBoard = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/whiteboards/${id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['whiteboards'] });
-      toastSuccess('Whiteboard deleted');
-    },
-    onError: () => toastError('Couldn’t delete that whiteboard'),
-  });
-  const deleteList = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/lists/${id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['lists'] });
-      toastSuccess('List deleted');
-    },
-    onError: () => toastError('Couldn’t delete that list'),
-  });
-
-  // When an editor is open we hand the main pane over to it. The user uses
-  // the back button to return to the calendar; the side rail vanishes so
-  // they have the full canvas/list at their disposal.
-  if (open?.kind === 'whiteboard') {
-    return (
-      <div className="h-full min-h-0">
-        <WhiteboardEditor whiteboardId={open.id} onClose={() => setOpen(null)} />
-      </div>
-    );
-  }
-  if (open?.kind === 'list') {
-    return (
-      <div className="h-full min-h-0">
-        <ListEditor
-          listId={open.id}
-          onClose={() => setOpen(null)}
-          onListChanged={() => qc.invalidateQueries({ queryKey: ['lists'] })}
-        />
-      </div>
-    );
-  }
 
   const today = todayKey(tz);
-  const selectedDay = byDay.get(selected) ?? { boards: [], lists: [] };
-  const canDelete = (item: { createdByUserId?: string | null; createdByKidId?: string | null }) => {
-    const p = session.data;
-    if (!p) return false;
-    if (p.kind === 'parent') return true;
-    return item.createdByKidId === p.kidId;
-  };
-  const dayActions = {
-    openBoard: (id: string) => {
-      setDaySheetOpen(false);
-      setOpen({ kind: 'whiteboard', id });
-    },
-    openList: (id: string) => {
-      setDaySheetOpen(false);
-      setOpen({ kind: 'list', id });
-    },
-    deleteBoard: (id: string) => deleteBoard.mutate(id),
-    deleteList: (id: string) => deleteList.mutate(id),
-    canDelete,
-  };
 
   return (
-    <div className="mx-auto h-full w-full max-w-[1800px] overflow-y-auto px-4 py-5 sm:px-7 sm:py-7">
-      <DesktopTitle
-        date="CALENDAR · CANVAS & LISTS"
-        title="The family canvas"
-        subtitle="Whiteboard sessions and shopping lists, pinned to the days they belong to."
-        right={
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => createBoard.mutate(selected)}
-              className="btn-secondary"
-            >
-              ＋ Whiteboard
-            </button>
-            <button
-              type="button"
-              onClick={() => createList.mutate({ date: selected, kind: 'shopping' })}
-              className="btn-primary"
-            >
-              ＋ Shopping list
-            </button>
-          </div>
-        }
-      />
-
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px]">
-        <section className="card overflow-hidden">
-          <header className="flex items-center justify-between gap-2 border-b-2 border-ink-900/10 bg-cream-100/50 px-4 py-3">
+    <div className="h-full overflow-y-auto p-4 sm:p-7">
+      <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+        <DesktopTitle
+          date={tz}
+          title="Schedule"
+          subtitle="When chores come due."
+          right={
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setAnchor(addMonths(anchor, -1))}
-                className="btn-icon"
+                className="btn-ghost"
                 aria-label="Previous month"
               >
-                ‹
+                ←
               </button>
-              <h2 className="font-display text-lg font-extrabold tracking-tight text-ink-900 sm:text-xl">
-                {monthLabel(anchor)}
-              </h2>
+              <button
+                type="button"
+                onClick={() => setAnchor(today)}
+                className="btn-secondary"
+              >
+                Today
+              </button>
               <button
                 type="button"
                 onClick={() => setAnchor(addMonths(anchor, 1))}
-                className="btn-icon"
+                className="btn-ghost"
                 aria-label="Next month"
               >
-                ›
+                →
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setAnchor(today);
-                setSelected(today);
-              }}
-              className="btn-ghost text-xs"
-            >
-              Today
-            </button>
-          </header>
+          }
+        />
 
-          <div className="grid grid-cols-7 gap-px bg-ink-900/10 px-px py-px text-center text-[11px] font-bold uppercase tracking-wide text-ink-500">
-            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-              <div key={d} className="bg-cream-100/60 py-1.5">
-                {d}
-              </div>
-            ))}
-          </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-display text-xl font-extrabold tracking-tight sm:text-2xl">
+            {monthLabel(anchor)}
+          </h2>
+          <label className="flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-ink-900"
+              checked={hideApproved}
+              onChange={(e) => setHideApproved(e.target.checked)}
+            />
+            Hide approved
+          </label>
+        </div>
 
-          <div className="grid grid-cols-7 gap-px bg-ink-900/10 px-px pb-px">
-            {grid.map((key) => {
-              const data = byDay.get(key) ?? { boards: [], lists: [] };
-              const inMonth = isSameMonth(key, anchor);
-              const isToday = key === today;
-              const isSelected = key === selected;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => {
-                    setSelected(key);
-                    setDaySheetOpen(true);
-                  }}
-                  className={`relative flex min-h-[88px] flex-col gap-1 bg-paper p-1.5 text-left transition hover:bg-cream-100 focus:outline-none focus:ring-2 focus:ring-accent-blue ${
-                    inMonth ? '' : 'opacity-50'
-                  } ${isSelected ? 'ring-2 ring-ink-900' : ''}`}
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span
-                      className={`grid h-6 w-6 place-items-center rounded-full font-bold tabular-nums ${
-                        isToday
-                          ? 'bg-accent-orange text-white shadow-paper-sm'
-                          : 'text-ink-700'
-                      }`}
-                    >
-                      {dayOfMonth(key)}
-                    </span>
-                    {(data.boards.length > 0 || data.lists.length > 0) && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-                        {data.boards.length + data.lists.length}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    {data.boards.slice(0, 2).map((b) => (
-                      <span
-                        key={b.id}
-                        className="truncate rounded-md bg-accent-blue/15 px-1.5 py-0.5 text-[11px] font-semibold text-accent-blue"
-                      >
-                        ✏️ {b.title}
-                      </span>
-                    ))}
-                    {data.lists.slice(0, 2).map((l) => (
-                      <span
-                        key={l.id}
-                        className={`truncate rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
-                          l.checkedCount === l.itemCount && l.itemCount > 0
-                            ? 'bg-money/15 text-money'
-                            : 'bg-cream-200 text-ink-700'
-                        }`}
-                      >
-                        {l.kind === 'shopping' ? '🛒' : l.kind === 'packing' ? '🧳' : '📋'} {l.title}
-                      </span>
-                    ))}
-                    {data.boards.length + data.lists.length > 4 && (
-                      <span className="text-[10px] text-ink-500">
-                        +{data.boards.length + data.lists.length - 4} more
-                      </span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+        <div className="grid grid-cols-7 gap-1 text-[11px] font-bold uppercase tracking-wider text-ink-500">
+          {WEEKDAYS.map((d) => (
+            <span key={d} className="px-1">
+              {d}
+            </span>
+          ))}
+        </div>
 
-        <aside className="flex flex-col gap-4">
-          <section className="card p-4">
-            <header className="mb-3 flex items-baseline justify-between gap-2">
-              <h3 className="font-display text-base font-extrabold tracking-tight text-ink-900">
-                {readableDate(selected)}
-              </h3>
-              <span className="text-xs text-ink-500">
-                {selectedDay.boards.length + selectedDay.lists.length === 0
-                  ? 'Nothing pinned yet'
-                  : `${selectedDay.boards.length} board · ${selectedDay.lists.length} list${
-                      selectedDay.lists.length === 1 ? '' : 's'
-                    }`}
-              </span>
-            </header>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => createBoard.mutate(selected)}
-                className="btn-secondary"
-              >
-                ✏️ New board
-              </button>
-              <button
-                type="button"
-                onClick={() => createList.mutate({ date: selected, kind: 'shopping' })}
-                className="btn-secondary"
-              >
-                🛒 New shopping list
-              </button>
-              <button
-                type="button"
-                onClick={() => createList.mutate({ date: selected, kind: 'todo' })}
-                className="btn-ghost text-xs"
-              >
-                + Todo
-              </button>
-              <button
-                type="button"
-                onClick={() => createList.mutate({ date: selected, kind: 'packing' })}
-                className="btn-ghost text-xs"
-              >
-                + Packing
-              </button>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-2">
-              {selectedDay.boards.map((b) => (
-                <div
-                  key={b.id}
-                  className="group flex items-center gap-3 rounded-xl border border-ink-900/15 bg-paper p-2.5 text-left transition hover:border-ink-900 hover:shadow-paper-sm"
-                >
-                  <button
-                    type="button"
-                    onClick={() => dayActions.openBoard(b.id)}
-                    className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-accent-blue/15 text-xl"
-                    aria-label={`Open ${b.title}`}
-                  >
-                    ✏️
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => dayActions.openBoard(b.id)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <div className="truncate text-sm font-bold text-ink-900">{b.title}</div>
-                    <div className="text-xs text-ink-500">
-                      {b.pointsCount === 0
-                        ? 'Empty board'
-                        : `${b.pointsCount.toLocaleString()} points`}
-                    </div>
-                  </button>
-                  {dayActions.canDelete(b) && (
-                    <button
-                      type="button"
-                      onClick={() => dayActions.deleteBoard(b.id)}
-                      className="btn-ghost text-xs text-accent-red"
-                    >
-                      Delete
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => dayActions.openBoard(b.id)}
-                    className="text-ink-400 transition group-hover:text-ink-900"
-                    aria-label={`Edit ${b.title}`}
-                  >
-                    Edit
-                  </button>
-                </div>
-              ))}
-              {selectedDay.lists.map((l) => (
-                <ListPreviewButton
-                  key={l.id}
-                  list={l}
-                  onOpen={() => dayActions.openList(l.id)}
-                  onDelete={dayActions.canDelete(l) ? () => dayActions.deleteList(l.id) : undefined}
-                />
-              ))}
-              {selectedDay.boards.length + selectedDay.lists.length === 0 && (
-                <p className="rounded-xl border border-dashed border-ink-900/20 bg-paper px-3 py-4 text-center text-sm text-ink-500">
-                  Pin a whiteboard or list to this day to get started.
-                </p>
-              )}
-            </div>
-          </section>
-
-          <section className="card p-4">
-            <header className="mb-2 flex items-baseline justify-between">
-              <h3 className="font-display text-sm font-extrabold tracking-tight text-ink-900">
-                Recent whiteboards
-              </h3>
-              <button
-                type="button"
-                onClick={() => createBoard.mutate(null)}
-                className="btn-ghost text-xs"
-              >
-                + Unscheduled board
-              </button>
-            </header>
-            {(recentBoards.data?.whiteboards ?? []).length === 0 ? (
-              <p className="text-xs text-ink-500">No boards yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-1.5">
-                {(recentBoards.data?.whiteboards ?? []).slice(0, 6).map((b) => (
-                  <li key={b.id}>
-                    <button
-                      onClick={() => setOpen({ kind: 'whiteboard', id: b.id })}
-                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-cream-100"
-                    >
-                      <span className="truncate font-semibold text-ink-900">{b.title}</span>
-                      <span className="text-[11px] text-ink-500">
-                        {b.date ?? 'unscheduled'}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          <section className="card p-4">
-            <header className="mb-2 flex items-baseline justify-between">
-              <h3 className="font-display text-sm font-extrabold tracking-tight text-ink-900">
-                Active lists
-              </h3>
-              <button
-                type="button"
-                onClick={() => createList.mutate({ date: null, kind: 'shopping' })}
-                className="btn-ghost text-xs"
-              >
-                + Unscheduled list
-              </button>
-            </header>
-            {(recentLists.data?.lists ?? []).length === 0 ? (
-              <p className="text-xs text-ink-500">No lists yet.</p>
-            ) : (
-              <ul className="flex flex-col gap-1.5">
-                {(recentLists.data?.lists ?? []).slice(0, 6).map((l) => (
-                  <li key={l.id}>
-                    <button
-                      onClick={() => setOpen({ kind: 'list', id: l.id })}
-                      className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-cream-100"
-                    >
-                      <span className="truncate font-semibold text-ink-900">{l.title}</span>
-                      <span className="text-[11px] text-ink-500">
-                        {l.checkedCount}/{l.itemCount}
-                        {l.totalCents > 0 ? ` · ${money(l.totalCents)}` : ''}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </aside>
+        <div className="grid grid-cols-7 gap-1.5">
+          {grid.map((dk) => (
+            <DayCell
+              key={dk}
+              dateKey={dk}
+              anchor={anchor}
+              today={today}
+              instances={sched.data?.days[dk] ?? []}
+              hideApproved={hideApproved}
+              onSelect={() => setSelected(dk)}
+              isPast={dk < today}
+            />
+          ))}
+        </div>
       </div>
-      {daySheetOpen && (
+
+      {selected && (
         <DaySheet
-          date={selected}
-          day={selectedDay}
-          actions={dayActions}
-          onClose={() => setDaySheetOpen(false)}
-          onNewBoard={() => createBoard.mutate(selected)}
-          onNewShoppingList={() => createList.mutate({ date: selected, kind: 'shopping' })}
+          dateKey={selected}
+          instances={sched.data?.days[selected] ?? []}
+          onClose={() => setSelected(null)}
         />
       )}
     </div>
   );
 }
 
-function DaySheet({
-  date,
-  day,
-  actions,
-  onClose,
-  onNewBoard,
-  onNewShoppingList,
+function DayCell({
+  dateKey,
+  anchor,
+  today,
+  instances,
+  hideApproved,
+  onSelect,
+  isPast,
 }: {
-  date: DateKey;
-  day: { boards: WhiteboardSummary[]; lists: ListSummary[] };
-  actions: {
-    openBoard: (id: string) => void;
-    openList: (id: string) => void;
-    deleteBoard: (id: string) => void;
-    deleteList: (id: string) => void;
-    canDelete: (item: { createdByUserId?: string | null; createdByKidId?: string | null }) => boolean;
-  };
-  onClose: () => void;
-  onNewBoard: () => void;
-  onNewShoppingList: () => void;
+  dateKey: DateKey;
+  anchor: DateKey;
+  today: DateKey;
+  instances: ScheduleInstance[];
+  hideApproved: boolean;
+  onSelect: () => void;
+  isPast: boolean;
 }) {
-  const total = day.boards.length + day.lists.length;
+  const inMonth = isSameMonth(dateKey, anchor);
+  const isToday = dateKey === today;
+
+  const visible = useMemo(
+    () => (hideApproved ? instances.filter((i) => i.status !== 'approved') : instances),
+    [hideApproved, instances],
+  );
+  const overdue = isPast && instances.some((i) => i.status === 'available' && !i.projected);
+  const max = 4;
+  const head = visible.slice(0, max);
+  const overflow = visible.length - head.length;
+
   return (
-    <div className="fixed inset-0 z-50 bg-ink-900/35 p-3 backdrop-blur-sm lg:hidden">
-      <button
-        type="button"
-        aria-label="Close day sheet"
-        className="absolute inset-0 h-full w-full cursor-default"
-        onClick={onClose}
-      />
-      <section className="safe-pb absolute inset-x-3 bottom-3 max-h-[78vh] overflow-hidden rounded-chunky bg-paper ring-2 ring-ink-900 shadow-paper-lg">
-        <header className="flex items-start justify-between gap-3 border-b border-ink-900/10 bg-cream-100 px-4 py-3">
-          <div>
-            <div className="page-tag">DAY DETAILS</div>
-            <h3 className="font-display text-xl font-extrabold tracking-tight text-ink-900">
-              {readableDate(date)}
-            </h3>
-            <p className="mt-1 text-xs text-ink-500">
-              {total === 0 ? 'No boards or lists yet.' : `${total} item${total === 1 ? '' : 's'} on this day`}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="btn-icon" aria-label="Close">
-            ×
-          </button>
-        </header>
-        <div className="max-h-[calc(78vh-92px)] overflow-y-auto p-4">
-          <div className="mb-3 flex flex-wrap gap-2">
-            <button type="button" onClick={onNewBoard} className="btn-secondary">
-              ✏️ New board
-            </button>
-            <button type="button" onClick={onNewShoppingList} className="btn-primary">
-              🛒 New list
-            </button>
-          </div>
-          <div className="flex flex-col gap-2">
-            {day.boards.map((b) => (
-              <div key={b.id} className="rounded-xl border border-ink-900/15 bg-paper p-3">
-                <div className="mb-2 flex items-start gap-3">
-                  <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-accent-blue/15 text-xl">
-                    ✏️
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold text-ink-900">{b.title}</div>
-                    <div className="text-xs text-ink-500">
-                      {b.pointsCount === 0 ? 'Empty board' : `${b.pointsCount.toLocaleString()} points`}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => actions.openBoard(b.id)} className="btn-primary">
-                    Open / edit
-                  </button>
-                  {actions.canDelete(b) && (
-                    <button
-                      type="button"
-                      onClick={() => actions.deleteBoard(b.id)}
-                      className="btn-danger"
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-            {day.lists.map((l) => (
-              <div key={l.id} className="rounded-xl border border-ink-900/15 bg-paper p-3">
-                <div className="mb-2 flex items-start gap-3">
-                  <div className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-xl">
-                    {l.kind === 'shopping' ? '🛒' : l.kind === 'packing' ? '🧳' : '📋'}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold text-ink-900">{l.title}</div>
-                    <div className="text-xs text-ink-500">
-                      {l.itemCount === 0
-                        ? 'Empty list'
-                        : `${l.checkedCount}/${l.itemCount} done${
-                            l.totalCents > 0 ? ` · ${money(l.totalCents)}` : ''
-                          }`}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={() => actions.openList(l.id)} className="btn-primary">
-                    Open / edit
-                  </button>
-                  {actions.canDelete(l) && (
-                    <button
-                      type="button"
-                      onClick={() => actions.deleteList(l.id)}
-                      className="btn-danger"
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-            {total === 0 && (
-              <p className="rounded-xl border border-dashed border-ink-900/20 bg-cream-100 px-3 py-5 text-center text-sm text-ink-500">
-                Create a whiteboard or list and it will be pinned to this day.
-              </p>
-            )}
-          </div>
-        </div>
-      </section>
-    </div>
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`card-soft min-h-[88px] p-1.5 text-left transition hover:bg-cream-50 ${
+        inMonth ? '' : 'opacity-60'
+      } ${isToday ? '!ring-2 !ring-ink-900' : ''}`}
+      style={{
+        // Overdue gets a 2px accent-red top border, layered on top of the
+        // card-soft ring without disturbing the rest of the card chrome.
+        boxShadow: overdue ? 'inset 0 2px 0 0 #DB4646' : undefined,
+      }}
+    >
+      <div className="mb-1 flex items-center justify-between gap-1.5">
+        <span
+          className={`grid h-6 w-6 place-items-center rounded-full text-xs font-extrabold ${
+            isToday ? 'bg-money text-cream-50' : 'text-ink-700'
+          }`}
+        >
+          {dayOfMonth(dateKey)}
+        </span>
+        {overdue && (
+          <span className="text-[9px] font-bold uppercase tracking-wider text-accent-red">
+            Overdue
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {head.map((inst) => (
+          <DayPill key={inst.id} instance={inst} />
+        ))}
+        {overflow > 0 && (
+          <span className="px-1 text-[10px] font-bold text-ink-500">
+            +{overflow} more
+          </span>
+        )}
+      </div>
+    </button>
   );
 }
 
-function ListPreviewButton({
-  list,
-  onOpen,
-  onDelete,
+function DayPill({ instance }: { instance: ScheduleInstance }) {
+  const dim = instance.status === 'approved' || instance.projected;
+  const dot =
+    instance.status === 'approved'
+      ? 'bg-money'
+      : instance.status === 'pending'
+        ? 'bg-accent-orange'
+        : instance.status === 'missed' || instance.status === 'rejected'
+          ? 'bg-accent-red'
+          : 'bg-ink-400';
+  return (
+    <span
+      className={`flex items-center gap-1 truncate rounded-md bg-paper px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-ink-900/15 ${
+        dim ? 'opacity-50' : ''
+      }`}
+      title={instance.choreName}
+    >
+      <span aria-hidden className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot}`} />
+      <span className="truncate">{instance.choreName}</span>
+    </span>
+  );
+}
+
+function DaySheet({
+  dateKey,
+  instances,
+  onClose,
 }: {
-  list: ListSummary;
-  onOpen: () => void;
-  onDelete?: () => void;
+  dateKey: DateKey;
+  instances: ScheduleInstance[];
+  onClose: () => void;
 }) {
-  const glyph = list.kind === 'shopping' ? '🛒' : list.kind === 'packing' ? '🧳' : '📋';
-  const allDone = list.itemCount > 0 && list.checkedCount === list.itemCount;
+  const sorted = [...instances].sort((a, b) =>
+    a.availableAt.localeCompare(b.availableAt),
+  );
+
   return (
     <div
-      className="group flex items-center gap-3 rounded-xl border border-ink-900/15 bg-paper p-2.5 text-left transition hover:border-ink-900 hover:shadow-paper-sm"
+      className="fixed inset-0 z-40 grid place-items-end bg-ink-900/40 p-0 backdrop-blur-sm sm:place-items-center sm:p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-label={`Schedule for ${dateKey}`}
     >
-      <button
-        type="button"
-        onClick={onOpen}
-        className="grid h-12 w-12 flex-shrink-0 place-items-center rounded-lg bg-cream-200 text-xl"
-        aria-label={`Open ${list.title}`}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-t-chunky bg-paper p-6 ring-2 ring-ink-900 shadow-paper sm:rounded-chunky animate-floatIn"
       >
-        {glyph}
-      </button>
-      <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <div className="truncate text-sm font-bold text-ink-900">{list.title}</div>
-        <div className="text-xs text-ink-500">
-          {list.itemCount === 0
-            ? 'Empty'
-            : `${list.checkedCount}/${list.itemCount} done${
-                list.totalCents > 0 ? ` · ${money(list.totalCents)}` : ''
-              }`}
-        </div>
-      </button>
-      {allDone && <span className="pill-approved">DONE</span>}
-      {onDelete && (
-        <button type="button" onClick={onDelete} className="btn-ghost text-xs text-accent-red">
-          Delete
+        <div className="page-tag mb-2">SCHEDULE</div>
+        <h2 className="font-display text-2xl font-extrabold tracking-tight text-ink-900 sm:text-3xl">
+          {dateKey}
+        </h2>
+        {sorted.length === 0 ? (
+          <p className="mt-3 text-sm text-ink-500">No chores scheduled.</p>
+        ) : (
+          <ul className="mt-4 flex flex-col gap-2">
+            {sorted.map((inst) => (
+              <li
+                key={inst.id}
+                className={`flex items-center justify-between gap-3 rounded-xl bg-cream-50 p-3 ring-1 ring-ink-900/10 ${
+                  inst.status === 'approved' || inst.projected ? 'opacity-60' : ''
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <ChoreIcon name={inst.choreName} size="sm" />
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold text-ink-900">
+                      {inst.choreName}
+                    </div>
+                    <div className="text-xs text-ink-500">
+                      {new Date(inst.availableAt).toLocaleTimeString(undefined, {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                      {inst.projected ? ' · upcoming' : ` · ${inst.status}`}
+                    </div>
+                  </div>
+                </div>
+                <span className="money-amt text-sm">
+                  {money(inst.amountCents)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button type="button" className="btn-primary mt-6 w-full" onClick={onClose}>
+          Close
         </button>
-      )}
-      <button
-        type="button"
-        onClick={onOpen}
-        className="text-ink-400 transition group-hover:text-ink-900"
-        aria-label={`Edit ${list.title}`}
-      >
-        Edit
-      </button>
+      </div>
     </div>
   );
 }

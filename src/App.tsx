@@ -6,11 +6,13 @@ import { AuthScreen } from './screens/AuthScreen';
 import { JoinFamilyScreen } from './screens/JoinFamilyScreen';
 import { KidPinScreen } from './screens/KidPinScreen';
 import { Desktops } from './screens/Desktops';
+import { OnboardWizard } from './screens/OnboardWizard';
 import { AdminLayout } from './screens/admin/AdminLayout';
 import { AdminChores } from './screens/admin/AdminChores';
 import { AdminFamily } from './screens/admin/AdminFamily';
 import { AdminLedger } from './screens/admin/AdminLedger';
 import { AdminMilestones } from './screens/admin/AdminMilestones';
+import { AdminNotifications } from './screens/admin/AdminNotifications';
 import { AdminBilling } from './screens/admin/AdminBilling';
 import { AdminDashPage } from './screens/AdminDashPage';
 import { PrivacyPolicy } from './screens/legal/PrivacyPolicy';
@@ -57,6 +59,23 @@ export function App() {
     );
   }
 
+  // Onboarding gate: a brand-new family lands at /onboard until the wizard
+  // completes. We only redirect parent principals — a kid PIN'd in on a
+  // paired tablet shouldn't be ambushed by the parent-only wizard. Privacy,
+  // terms, and the wizard itself are always reachable so the parent can
+  // read terms or complete onboarding mid-flow.
+  const needsOnboarding =
+    isParent &&
+    session.data?.kind === 'parent' &&
+    session.data.familyOnboardingCompletedAt === null;
+  const onboardingPaths = ['/onboard', '/privacy', '/terms'];
+  const onAllowedDuringOnboarding = onboardingPaths.some((p) =>
+    location.pathname === p || location.pathname.startsWith(`${p}/`),
+  );
+  if (needsOnboarding && !onAllowedDuringOnboarding) {
+    return <Navigate to="/onboard" replace />;
+  }
+
   return (
     <>
       <a href="#cb-main" className="skip-link">
@@ -65,6 +84,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<Desktops />} />
         <Route path="/desktop/:idx" element={<Desktops />} />
+        <Route path="/onboard" element={<OnboardWizard />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
         <Route path="/join/:token" element={<JoinFamilyScreen />} />
@@ -75,6 +95,7 @@ export function App() {
             <Route path="family" element={<AdminFamily />} />
             <Route path="ledger" element={<AdminLedger />} />
             <Route path="milestones" element={<AdminMilestones />} />
+            <Route path="notifications" element={<AdminNotifications />} />
             <Route path="billing" element={<AdminBilling />} />
           </Route>
         )}

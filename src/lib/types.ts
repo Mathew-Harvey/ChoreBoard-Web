@@ -26,6 +26,8 @@ export type ParentPrincipal = {
   email: string;
   color: string;
   gender: StatedGender;
+  /** ISO timestamp set when the OnboardWizard completed for this family. */
+  familyOnboardingCompletedAt: string | null;
 };
 
 export type KidPrincipal = {
@@ -39,12 +41,48 @@ export type KidPrincipal = {
 
 export type Principal = ParentPrincipal | KidPrincipal;
 
+export type EntitlementsPlan = 'free' | 'family';
+
+export type Entitlements = {
+  plan: EntitlementsPlan;
+  status: 'trialing' | 'active' | 'past_due' | 'cancelled' | 'expired';
+  limits: { kids: number | null; parents: number | null };
+  remaining: { kids: number; parents: number };
+  features: {
+    push: boolean;
+    fullHistory: boolean;
+    allBadges: boolean;
+    csvExport: boolean;
+  };
+};
+
 export type Family = {
   id: string;
   name: string;
   payoutDay: number;
   payoutTime: string;
   timezone: string;
+  onboardingCompletedAt: string | null;
+  tvCelebrationSound: boolean;
+  pairingReminderDismissedAt: string | null;
+};
+
+export type DevicePairing = {
+  id: string;
+  deviceLabel: string | null;
+  issuedByUserId: string | null;
+  issuedAt: string;
+  expiresAt: string;
+  consumedAt: string | null;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+  status: 'pending' | 'active' | 'revoked' | 'expired';
+};
+
+export type PairingIssuance = {
+  pairing: { id: string; issuedAt: string; expiresAt: string };
+  // Plaintext shown exactly once.
+  code: string;
 };
 
 export type Kid = {
@@ -180,88 +218,6 @@ export type Goal = {
   hitAt: string | null;
   progressCents: number;
   percent: number;
-};
-
-// Calendar Canvas: whiteboards + lists -------------------------------------
-
-export type WhiteboardSummary = {
-  id: string;
-  title: string;
-  date: string | null; // YYYY-MM-DD
-  background: 'paper' | 'grid' | 'dots' | 'dark' | string;
-  width: number;
-  height: number;
-  pointsCount: number;
-  createdByUserId: string | null;
-  createdByKidId: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type StrokeTool = 'pen' | 'highlight' | 'eraser';
-export type Stroke = {
-  tool: StrokeTool;
-  color: string;
-  size: number;
-  // Each point is [x, y] in canvas coords (0..width, 0..height).
-  points: Array<[number, number]>;
-};
-
-export type Whiteboard = WhiteboardSummary & {
-  strokesJson: Stroke[];
-};
-
-export type ListKind = 'shopping' | 'todo' | 'packing' | 'other';
-
-export type ProductCard = {
-  source: 'woolworths';
-  externalId: string;
-  name: string;
-  brand: string | null;
-  image: string | null;
-  packageSize: string | null;
-  priceCents: number | null;
-  wasPriceCents: number | null;
-  onSpecial: boolean;
-  productUrl: string | null;
-};
-
-export type ListSummary = {
-  id: string;
-  familyId: string;
-  title: string;
-  kind: ListKind;
-  date: string | null;
-  store: string | null;
-  archivedAt: string | null;
-  createdByUserId: string | null;
-  createdByKidId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  itemCount: number;
-  checkedCount: number;
-  totalCents: number;
-};
-
-export type ListItem = {
-  id: string;
-  listId: string;
-  familyId: string;
-  text: string;
-  qty: number;
-  productJson: ProductCard | null;
-  unitPriceCents: number | null;
-  checkedAt: string | null;
-  checkedByUserId: string | null;
-  checkedByKidId: string | null;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ListDetail = {
-  list: Omit<ListSummary, 'itemCount' | 'checkedCount' | 'totalCents'>;
-  items: ListItem[];
 };
 
 // Milestones & rewards ----------------------------------------------------

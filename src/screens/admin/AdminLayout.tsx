@@ -24,6 +24,7 @@ export function AdminLayout() {
           <Tab to="family">Family &amp; members</Tab>
           <Tab to="ledger">Ledger &amp; payout</Tab>
           <Tab to="milestones">Milestones</Tab>
+          <Tab to="notifications">Notifications</Tab>
           <Tab to="billing">Billing</Tab>
         </div>
       </nav>
