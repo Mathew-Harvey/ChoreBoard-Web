@@ -6,6 +6,11 @@ dist
 *.log
 .DS_Store
 
+# Raw dance source clips. The cleaned-up VP9-alpha WebMs in
+# src/assets/avatars/video/ ARE tracked — but the ~30 MB of raw mp4s that
+# produced them (the inputs to scripts/process-dance-videos.ps1) are not.
+src/assets/avatars/video/raw/
+
 # Capacitor — generated native shells.
 # We commit ios/ and android/ (Capacitor convention) but ignore build output.
 ios/App/build/

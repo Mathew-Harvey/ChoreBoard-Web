@@ -8,6 +8,7 @@ import {
   tierPercent,
   type Gender,
 } from '../lib/levelTier';
+import { TierDancer } from './TierDancer';
 
 // ---------------------------------------------------------------------------
 //  TIER AVATAR (round)
@@ -175,7 +176,6 @@ export function TierPortrait({
   showNextHint = true,
 }: TierPortraitProps) {
   const tier = tierForLevel(level);
-  const portrait = portraitFor(level, gender);
   const next = nextTier(level);
   const next_portrait = next ? portraitFor(level + 1, gender) : null;
   const percent = tierPercent(intoLevel, nextLevelAt);
@@ -238,12 +238,17 @@ export function TierPortrait({
               }}
             />
           )}
-          {/* Main portrait. Subtle breathing motion. */}
-          <img
-            src={portrait}
+          {/* Main portrait. Subtle breathing motion when idle; on hover
+              (or tap on touch) the figure breaks into the tier-specific
+              dance via <TierDancer>. The still image lives inside the
+              dancer and stays put underneath the video, so nothing flashes
+              while bytes fly in. */}
+          <TierDancer
+            level={tier.tier}
+            gender={gender}
             alt={`${name} as a ${tier.name}`}
-            draggable={false}
-            className="relative h-full w-auto animate-portraitBreath drop-shadow-[0_18px_24px_rgba(16,24,43,0.18)]"
+            mode="interactive"
+            className="inline-block h-full w-auto animate-portraitBreath drop-shadow-[0_18px_24px_rgba(16,24,43,0.18)]"
           />
         </div>
 

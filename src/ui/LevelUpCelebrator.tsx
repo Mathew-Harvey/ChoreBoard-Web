@@ -2,10 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { BoardResponse, MemberType } from '../lib/types';
-import {
-  portraitFor,
-  tierForLevel,
-} from '../lib/levelTier';
+import { tierForLevel } from '../lib/levelTier';
+import { TierDancer } from './TierDancer';
 import { buildMemberLookup } from './primitives';
 import { celebrate } from '../lib/celebrate';
 
@@ -85,7 +83,8 @@ export function LevelUpCelebrator() {
   const tier = tierForLevel(evt.level);
   // Use the resolved gender for this specific member — falls back to the
   // alternating m/f pick for `'unspecified'` ("rather not say") members.
-  const portrait = portraitFor(evt.level, member.gender);
+  // The `<TierDancer mode="celebration">` below pulls the matching dance
+  // clip; we no longer need to resolve the portrait URL here directly.
 
   return (
     <div
@@ -148,10 +147,16 @@ export function LevelUpCelebrator() {
                 className="absolute inset-0 animate-tierGlow"
                 style={{ background: tier.pedestal }}
               />
-              <img
-                src={portrait}
-                alt=""
-                draggable={false}
+              {/* The dance plays on a loop for the duration of the
+                  celebration overlay. Under `prefers-reduced-motion`
+                  TierDancer degrades to the still portrait
+                  automatically, so the level-up moment still works
+                  for users who opt out of motion. */}
+              <TierDancer
+                level={evt.level}
+                gender={member.gender}
+                alt={`${member.name} as a ${tier.name}`}
+                mode="celebration"
                 className="relative h-full w-auto drop-shadow-[0_18px_30px_rgba(16,24,43,0.30)]"
               />
             </div>

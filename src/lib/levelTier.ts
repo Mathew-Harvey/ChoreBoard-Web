@@ -32,6 +32,23 @@ import lvl4Female from '../assets/avatars/lvl4f.png';
 import lvl5Female from '../assets/avatars/lvl5f.png';
 import lvl6Female from '../assets/avatars/lvl6f.png';
 
+// Per-tier dance clips (VP9 + alpha, ~6s, ~300-650 KB each). One per
+// gender × tier. These are imported as URLs so Vite fingerprints them and
+// the static avatar PNG remains the only thing on the critical path —
+// the video is only fetched once a consumer mounts a <TierDancer>.
+import lvl1MaleDance from '../assets/avatars/video/lvl1dance.webm';
+import lvl2MaleDance from '../assets/avatars/video/lvl2dance.webm';
+import lvl3MaleDance from '../assets/avatars/video/lvl3dance.webm';
+import lvl4MaleDance from '../assets/avatars/video/lvl4dance.webm';
+import lvl5MaleDance from '../assets/avatars/video/lvl5dance.webm';
+import lvl6MaleDance from '../assets/avatars/video/lvl6dance.webm';
+import lvl1FemaleDance from '../assets/avatars/video/lvl1fdance.webm';
+import lvl2FemaleDance from '../assets/avatars/video/lvl2fdance.webm';
+import lvl3FemaleDance from '../assets/avatars/video/lvl3fdance.webm';
+import lvl4FemaleDance from '../assets/avatars/video/lvl4fdance.webm';
+import lvl5FemaleDance from '../assets/avatars/video/lvl5fdance.webm';
+import lvl6FemaleDance from '../assets/avatars/video/lvl6fdance.webm';
+
 /**
  * Render-layer gender — what the avatar component actually paints. Always
  * `'m'` or `'f'`; "rather not say" is resolved to one of those at render
@@ -149,6 +166,25 @@ const PORTRAITS: Record<Gender, string[]> = {
   f: [lvl1Female, lvl2Female, lvl3Female, lvl4Female, lvl5Female, lvl6Female],
 };
 
+const DANCES: Record<Gender, string[]> = {
+  m: [
+    lvl1MaleDance,
+    lvl2MaleDance,
+    lvl3MaleDance,
+    lvl4MaleDance,
+    lvl5MaleDance,
+    lvl6MaleDance,
+  ],
+  f: [
+    lvl1FemaleDance,
+    lvl2FemaleDance,
+    lvl3FemaleDance,
+    lvl4FemaleDance,
+    lvl5FemaleDance,
+    lvl6FemaleDance,
+  ],
+};
+
 /**
  * Resolve the visual tier for a backend level. Levels ≥ MAX_TIER all share
  * the top portrait but the returned `.tier` is clamped so consumers don't
@@ -166,6 +202,23 @@ export function portraitFor(
 ): string {
   const lv = Math.max(1, Math.min(MAX_TIER, level ?? 1));
   const set = PORTRAITS[gender] ?? PORTRAITS.m;
+  return set[lv - 1]!;
+}
+
+/**
+ * Looping dance video URL (WebM VP9 + alpha) for a given level + gender.
+ *
+ * Same level/gender contract as `portraitFor` — clamped to MAX_TIER, falls
+ * back to the male set if the gender is unknown. The clip carries its own
+ * alpha channel so the figure sits cleanly over any tier-coloured pedestal
+ * or sunburst behind it.
+ */
+export function danceFor(
+  level: number | undefined | null,
+  gender: Gender = 'm',
+): string {
+  const lv = Math.max(1, Math.min(MAX_TIER, level ?? 1));
+  const set = DANCES[gender] ?? DANCES.m;
   return set[lv - 1]!;
 }
 
