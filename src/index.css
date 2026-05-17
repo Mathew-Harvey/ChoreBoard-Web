@@ -513,27 +513,42 @@
 
   /* Columns scroll their card lists internally so the page itself never
      scrolls. The card list uses a negative-margin trick so the scrollbar
-     gutter doesn't clip the card ring. */
+     gutter doesn't clip the card ring.
+     IMPORTANT: this internal vertical scroller is intentionally scoped
+     to `sm:` and up. On a phone the kanban already has TWO scroll axes
+     in play (page-level vertical on `[data-kanban-root]`, horizontal
+     between lanes on `[data-kanban-lanes]`) — adding a third nested
+     vertical scroller inside each column causes iOS Safari and Android
+     Chrome to lock the touch gesture to the innermost element first.
+     Because most columns hold ≤ 2 cards (no actual overflow), the
+     horizontal swipe to reach the next family member's lane gets
+     swallowed by a vertical scroller that has nothing to scroll. On
+     phones we let columns grow with content and rely on the page
+     scrolling vertically instead. */
   [data-kanban-col-list] {
     flex: 1 1 auto;
-    min-height: 10rem;
-    max-height: min(52vh, 34rem);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
-    /* Subtle bottom fade so a scrollable column has a visual cue. */
-    mask-image: linear-gradient(
-      to bottom,
-      rgba(0, 0, 0, 1) 0,
-      rgba(0, 0, 0, 1) calc(100% - 28px),
-      rgba(0, 0, 0, 0.65) 100%
-    );
-    -webkit-mask-image: linear-gradient(
-      to bottom,
-      rgba(0, 0, 0, 1) 0,
-      rgba(0, 0, 0, 1) calc(100% - 28px),
-      rgba(0, 0, 0, 0.65) 100%
-    );
+  }
+  @media (min-width: 640px) {
+    [data-kanban-col-list] {
+      min-height: 10rem;
+      max-height: min(52vh, 34rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      /* Subtle bottom fade so a scrollable column has a visual cue. */
+      mask-image: linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 1) 0,
+        rgba(0, 0, 0, 1) calc(100% - 28px),
+        rgba(0, 0, 0, 0.65) 100%
+      );
+      -webkit-mask-image: linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 1) 0,
+        rgba(0, 0, 0, 1) calc(100% - 28px),
+        rgba(0, 0, 0, 0.65) 100%
+      );
+    }
   }
 
   /* The "kiosk dense" card variant. Used on tablet-sized viewports where
@@ -612,11 +627,28 @@
       max-height: 320px;
     }
   }
+  /* `flex: 1 1 auto` (not `1 1 0`) is deliberate: the tray column is a
+     CSS grid item with `max-height` but NO definite height, so a list
+     with `flex-basis: 0` contributes nothing to intrinsic sizing and
+     the column collapses to just its header — pending items render
+     into 0px of clipped space. `auto` lets the list contribute its
+     content height, `min-height: 0` still lets it shrink when the
+     `max-height` cap kicks in, and `overflow-y: auto` (sm+ only)
+     scrolls the overflow. The lane column lists already use the same
+     pattern, see `[data-kanban-col-list]`.
+     The internal scroller is scoped to sm: and up for the same reason
+     as the lane lists — on phones the tray rows flow naturally and
+     the page handles vertical scrolling, so a touch on a tray row
+     can never be hijacked by a no-op nested scroller. */
   [data-kanban-tray] [data-tray-list] {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+  }
+  @media (min-width: 640px) {
+    [data-kanban-tray] [data-tray-list] {
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
   }
 
   /* Pending/Completed cards inside the tray are rendered as a single

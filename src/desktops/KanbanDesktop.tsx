@@ -629,7 +629,7 @@ function AvailableColumn({
         isOver ? 'outline outline-2 outline-offset-2 outline-accent-yellow' : ''
       }`}
     >
-      <header className="flex flex-shrink-0 items-center justify-between rounded-t-chunky bg-ink-900 px-1.5 py-1">
+      <header className="flex flex-shrink-0 items-center justify-between gap-2 px-1 pt-0.5">
         <h2 className="font-display text-sm font-bold sm:text-base 2xl:text-lg">
           Available · <span className="text-cream-50/60">{items.length}</span>
         </h2>
@@ -778,9 +778,17 @@ function MemberColumn({
       style={{
         backgroundColor: hexAlpha(accent, 0.18),
         outlineColor: isOver ? accent : 'transparent',
+        // Accent ribbon along the top edge — a 4px stripe in the member's
+        // colour curves into the chunky corners and anchors the lane's
+        // identity without leaning on the avatar to do all the work. We
+        // shave the same 4px off the top padding so the header sits at the
+        // same baseline as it would without the ribbon (p-2.5 → 10px - 4px
+        // border = 6px).
+        borderTop: `4px solid ${accent}`,
+        paddingTop: 6,
       }}
     >
-      <header className="flex flex-shrink-0 items-center justify-between gap-2 px-1">
+      <header className="flex flex-shrink-0 items-center justify-between gap-2 px-1 pt-0.5">
         <div className="flex min-w-0 items-center gap-2">
           <MemberAvatar
             name={column.name}
@@ -837,18 +845,26 @@ function MemberColumn({
 }
 
 function DropHint({ accent }: { accent: string }) {
+  // Soft dashed empty-state that nests inside the chunky column. The radius
+  // (`rounded-2xl` = 16px) is one step in from the lane's `rounded-chunky`
+  // (22px) → 10-12px inner padding for a concentric look. The dashed border
+  // sits at 55% accent opacity so it reads as a hint rather than another
+  // hard border competing with the lane's dark ring; a 6% accent-tinted
+  // fill keeps the box from feeling like a hollow rectangle.
   return (
     <div
-      className="grid place-items-center rounded-xl py-8 text-center text-[11px] font-bold uppercase tracking-wider text-ink-700 transition"
+      className="grid place-items-center rounded-2xl px-3 py-6 text-center transition sm:py-7"
       style={{
-        border: `2px dashed ${accent}`,
-        backgroundColor: 'transparent',
+        border: `2px dashed ${hexAlpha(accent, 0.55)}`,
+        backgroundColor: hexAlpha(accent, 0.06),
       }}
     >
-      <div>
-        <div className="opacity-70">Drop a chore here</div>
-        <div className="mt-1 text-[10px] font-semibold normal-case opacity-60">
-          (or use the ⋯ menu)
+      <div className="flex flex-col items-center gap-1">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-ink-700/80">
+          Drop a chore here
+        </div>
+        <div className="text-[10px] font-medium text-ink-500/80">
+          or use the ⋯ menu
         </div>
       </div>
     </div>
