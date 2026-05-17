@@ -3,6 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { money, relativePast } from '../lib/format';
+import {
+  dayKeyToZonedDate,
+  dayKeyToZonedEndOfDay,
+  formatShortDate,
+  formatWeekRange,
+  localDayKey,
+} from '../lib/time';
 import type {
   BoardResponse,
   HistoryBiggestSingle,
@@ -94,6 +101,8 @@ export function HistoryDesktop({ board }: { board?: BoardResponse }) {
     writeUrl(filter, m);
   };
 
+  const tz = board?.family.timezone ?? 'UTC';
+
   // Build the API query string once — re-used for the JSON fetch and
   // the CSV download anchor below.
   const apiQuery = useMemo(() => {
@@ -101,15 +110,15 @@ export function HistoryDesktop({ board }: { board?: BoardResponse }) {
     if (filter.kind === 'preset') {
       params.set('preset', filter.preset);
     } else {
-      if (filter.from) params.set('from', toIsoStart(filter.from));
-      if (filter.to) params.set('to', toIsoEnd(filter.to));
+      if (filter.from) params.set('from', toIsoStart(filter.from, tz));
+      if (filter.to) params.set('to', toIsoEnd(filter.to, tz));
     }
     if (memberFilter.kind === 'member') {
       params.set('memberType', memberFilter.type);
       params.set('memberId', memberFilter.id);
     }
     return params.toString();
-  }, [filter, memberFilter]);
+  }, [filter, memberFilter, tz]);
 
   // Cache key reflects everything that changes the response shape. The
   // SSE bus invalidates `['history']` (prefix match), so any in-flight
@@ -199,11 +208,12 @@ export function HistoryDesktop({ board }: { board?: BoardResponse }) {
         ) : (
           <>
             <HeroTotals data={data} />
-            <HighlightsRow data={data} />
+            <HighlightsRow data={data} tz={tz} />
             <TrendCard
               daily={data.daily}
               previousDaily={data.previousDaily}
               previousLabel={data.range.label.toLowerCase()}
+              tz={tz}
             />
             <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr] 2xl:gap-6">
               <MemberLeaderboard
@@ -215,10 +225,10 @@ export function HistoryDesktop({ board }: { board?: BoardResponse }) {
             </div>
             <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr] 2xl:gap-6">
               <StatusBreakdown data={data} />
-              <BestDayCard data={data} />
+              <BestDayCard data={data} tz={tz} />
             </div>
             <DayOfWeekCard rows={data.byDayOfWeek} />
-            <WeeksTable data={data} />
+            <WeeksTable data={data} tz={tz} />
           </>
         )}
       </div>
@@ -243,6 +253,7 @@ function FilterStrip({
   setMemberFilter: (m: MemberFilter) => void;
   board: BoardResponse;
 }) {
+  const tz = board.family.timezone;
   // Member-focus list: kids first (in roster order) then parents — matches
   // the family-dashboard reading order so the chips feel familiar.
   const members = useMemo(() => {
@@ -290,8 +301,8 @@ function FilterStrip({
               const monthAgo = new Date(today.getTime() - 30 * 86_400_000);
               setFilter({
                 kind: 'custom',
-                from: dateInputValue(monthAgo),
-                to: dateInputValue(today),
+                from: dateInputValue(monthAgo, tz),
+                to: dateInputValue(today, tz),
               });
             }
           }}
@@ -326,7 +337,7 @@ function FilterStrip({
               className="input !py-1.5"
               value={filter.to}
               min={filter.from || undefined}
-              max={dateInputValue(new Date())}
+              max={dateInputValue(new Date(), tz)}
               onChange={(e) => setFilter({ ...filter, to: e.target.value })}
             />
           </label>
@@ -499,10 +510,12 @@ function TrendCard({
   daily,
   previousDaily,
   previousLabel,
+  tz,
 }: {
   daily: HistoryDayBucket[];
   previousDaily: HistoryDayBucket[];
   previousLabel: string;
+  tz: string;
 }) {
   // We collapse very long ranges into weekly buckets so the bar chart
   // stays legible on phones. The threshold (>60 bars) is just an
@@ -604,7 +617,7 @@ function TrendCard({
                     rx={Math.min(0.8, barWidth / 3)}
                     fill="rgba(16,24,43,0.18)"
                   >
-                    <title>{`Prev ${humanLabel(prev.date, grouping === 'week')}: ${money(prev.cents)}`}</title>
+                    <title>{`Prev ${humanLabel(prev.date, grouping === 'week', tz)}: ${money(prev.cents)}`}</title>
                   </rect>
                 );
               })}
@@ -625,19 +638,20 @@ function TrendCard({
                   stroke="#10182B"
                   strokeWidth="0.3"
                 >
-                  <title>{`${humanLabel(d.date, grouping === 'week')}: ${money(d.cents)} · ${d.chores} chore${d.chores === 1 ? '' : 's'}`}</title>
+                  <title>{`${humanLabel(d.date, grouping === 'week', tz)}: ${money(d.cents)} · ${d.chores} chore${d.chores === 1 ? '' : 's'}`}</title>
                 </rect>
               );
             })}
           </svg>
           <div className="mt-2 flex items-center justify-between text-[10px] uppercase tracking-wider text-ink-500 sm:text-xs">
             <span>
-              {humanLabel(groupedCurrent[0]?.date ?? '', grouping === 'week')}
+              {humanLabel(groupedCurrent[0]?.date ?? '', grouping === 'week', tz)}
             </span>
             <span>
               {humanLabel(
                 groupedCurrent[groupedCurrent.length - 1]?.date ?? '',
                 grouping === 'week',
+                tz,
               )}
             </span>
           </div>
@@ -915,7 +929,7 @@ function StatusLegend({
 // Best day card
 // ---------------------------------------------------------------------------
 
-function BestDayCard({ data }: { data: HistoryResponse }) {
+function BestDayCard({ data, tz }: { data: HistoryResponse; tz: string }) {
   const best = data.totals.bestDay;
   return (
     <section className="card p-5 sm:p-6 2xl:p-8">
@@ -936,7 +950,7 @@ function BestDayCard({ data }: { data: HistoryResponse }) {
               {money(best.cents)}
             </div>
             <div className="mt-1 text-sm text-ink-500 sm:text-base">
-              {humanLabel(best.date, false)} ·{' '}
+              {humanLabel(best.date, false, tz)} ·{' '}
               {best.chores} chore{best.chores === 1 ? '' : 's'}
             </div>
           </div>
@@ -951,7 +965,7 @@ function BestDayCard({ data }: { data: HistoryResponse }) {
 // Weeks gone by table
 // ---------------------------------------------------------------------------
 
-function WeeksTable({ data }: { data: HistoryResponse }) {
+function WeeksTable({ data, tz }: { data: HistoryResponse; tz: string }) {
   if (data.weeks.length === 0) {
     return null;
   }
@@ -976,7 +990,7 @@ function WeeksTable({ data }: { data: HistoryResponse }) {
           >
             <div className="min-w-0">
               <div className="text-xs font-semibold uppercase tracking-wider text-ink-500">
-                {weekRangeLabel(w.startsAt, w.endsAt)}
+                {weekRangeLabel(w.startsAt, w.endsAt, tz)}
               </div>
               <div className="mt-0.5 flex items-center gap-2">
                 <span className="font-display text-base font-extrabold sm:text-lg">
@@ -1019,64 +1033,45 @@ function WeeksTable({ data }: { data: HistoryResponse }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function dateInputValue(d: Date): string {
-  // `<input type="date">` always wants YYYY-MM-DD in the *local* zone.
-  // Using the locale-stable en-CA format saves us juggling timezones.
-  return new Intl.DateTimeFormat('en-CA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(d);
+/**
+ * `<input type="date">` always wants `YYYY-MM-DD`. We anchor it to the
+ * family timezone so the user is editing their family's calendar days,
+ * not the viewer's browser ones — matches the API's `HistoryDayBucket`
+ * contract (`YYYY-MM-DD in family TZ`).
+ */
+function dateInputValue(d: Date, tz: string): string {
+  return localDayKey(d, tz);
 }
 
-function toIsoStart(yyyymmdd: string): string {
-  // Treat the date as the start of that local day.
-  const [y, m, d] = yyyymmdd.split('-').map(Number);
-  if (!y || !m || !d) return new Date().toISOString();
-  return new Date(y, m - 1, d, 0, 0, 0).toISOString();
+function toIsoStart(yyyymmdd: string, tz: string): string {
+  const date = dayKeyToZonedDate(yyyymmdd, tz);
+  if (isNaN(date.getTime())) return new Date().toISOString();
+  return date.toISOString();
 }
 
-function toIsoEnd(yyyymmdd: string): string {
-  // Inclusive "to" boundary — bump to end-of-day local so the user's
-  // last selected day is included in the range.
-  const [y, m, d] = yyyymmdd.split('-').map(Number);
-  if (!y || !m || !d) return new Date().toISOString();
-  return new Date(y, m - 1, d, 23, 59, 59).toISOString();
+function toIsoEnd(yyyymmdd: string, tz: string): string {
+  const date = dayKeyToZonedEndOfDay(yyyymmdd, tz);
+  if (isNaN(date.getTime())) return new Date().toISOString();
+  return date.toISOString();
 }
 
-function humanLabel(yyyymmdd: string, isWeek: boolean): string {
+function humanLabel(yyyymmdd: string, isWeek: boolean, tz: string): string {
   if (!yyyymmdd) return '';
-  const [y, m, d] = yyyymmdd.split('-').map(Number);
-  if (!y || !m || !d) return yyyymmdd;
-  const date = new Date(y, m - 1, d);
+  const date = dayKeyToZonedDate(yyyymmdd, tz);
+  if (isNaN(date.getTime())) return yyyymmdd;
   if (isWeek) {
-    return `Wk of ${date.toLocaleDateString(undefined, {
+    const monthDay = new Intl.DateTimeFormat(undefined, {
+      timeZone: tz,
       month: 'short',
       day: 'numeric',
-    })}`;
+    }).format(date);
+    return `Wk of ${monthDay}`;
   }
-  return date.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
+  return formatShortDate(date, tz);
 }
 
-function weekRangeLabel(startsAt: string, endsAt: string): string {
-  const start = new Date(startsAt);
-  const end = new Date(endsAt);
-  const sameYear = start.getFullYear() === end.getFullYear();
-  const startStr = start.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-  });
-  const endStr = end.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-  return `${startStr} – ${endStr}`;
+function weekRangeLabel(startsAt: string, endsAt: string, tz: string): string {
+  return formatWeekRange(startsAt, endsAt, tz);
 }
 
 function historyCsvFilename(data: HistoryResponse): string {
@@ -1090,12 +1085,12 @@ function historyCsvFilename(data: HistoryResponse): string {
 // Highlights row
 // ---------------------------------------------------------------------------
 
-function HighlightsRow({ data }: { data: HistoryResponse }) {
+function HighlightsRow({ data, tz }: { data: HistoryResponse; tz: string }) {
   const { bestWeek, biggestSingle, mostRepeated } = data.highlights;
   if (!bestWeek && !biggestSingle && !mostRepeated) return null;
   return (
     <section className="grid gap-3 sm:grid-cols-3 2xl:gap-4">
-      <BestWeekHighlight week={bestWeek} />
+      <BestWeekHighlight week={bestWeek} tz={tz} />
       <BiggestSingleHighlight entry={biggestSingle} />
       <MostRepeatedHighlight chore={mostRepeated} />
     </section>
@@ -1130,7 +1125,7 @@ function HighlightShell({
   );
 }
 
-function BestWeekHighlight({ week }: { week: HistoryWeekRow | null }) {
+function BestWeekHighlight({ week, tz }: { week: HistoryWeekRow | null; tz: string }) {
   if (!week) {
     return (
       <HighlightShell tag="Best week" accent="rgba(232,177,42,0.25)" icon="🏆">
@@ -1146,7 +1141,7 @@ function BestWeekHighlight({ week }: { week: HistoryWeekRow | null }) {
         {money(week.totalCents)}
       </div>
       <p className="mt-0.5 truncate text-xs text-ink-500 sm:text-sm">
-        {weekRangeLabel(week.startsAt, week.endsAt)} · {week.choreCount} chore
+        {weekRangeLabel(week.startsAt, week.endsAt, tz)} · {week.choreCount} chore
         {week.choreCount === 1 ? '' : 's'}
         {week.championName ? ` · 👑 ${week.championName}` : ''}
       </p>

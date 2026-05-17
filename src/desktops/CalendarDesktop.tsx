@@ -34,9 +34,28 @@ import { money } from '../lib/format';
  * editor when something is open, so the calendar/topbar chrome stays put.
  */
 export function CalendarDesktop({ family }: { family?: Family }) {
+  // Without a loaded family record we'd be silently keying "today" off the
+  // viewer's browser timezone, which is wrong for any parent travelling
+  // outside the family TZ. Render a skeleton until family is in hand, then
+  // mount the real desktop so every cell on the calendar reflects the
+  // family's calendar day from first paint.
+  if (!family) {
+    return (
+      <div className="h-full overflow-y-auto p-4 sm:p-7">
+        <div className="mx-auto max-w-[1600px] animate-pulse space-y-4">
+          <div className="h-6 w-40 rounded bg-cream-200" />
+          <div className="h-[480px] rounded-2xl bg-cream-200/60" />
+        </div>
+      </div>
+    );
+  }
+  return <CalendarDesktopInner family={family} />;
+}
+
+function CalendarDesktopInner({ family }: { family: Family }) {
   const qc = useQueryClient();
   const session = useSession();
-  const tz = family?.timezone;
+  const tz = family.timezone;
   const [anchor, setAnchor] = useState<DateKey>(todayKey(tz));
   const [selected, setSelected] = useState<DateKey>(todayKey(tz));
   const [daySheetOpen, setDaySheetOpen] = useState(false);

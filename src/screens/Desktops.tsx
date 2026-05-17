@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { formatPayoutShort } from '../lib/time';
 import { useLogout, useSession } from '../lib/session';
 import { useSseStatus } from '../lib/sseStatus';
 import type { BoardResponse, LeaderboardResponse } from '../lib/types';
@@ -236,6 +237,7 @@ export function Desktops() {
       <TopBar
         familyName={board.data?.family.name}
         payoutAt={leaderboard.data?.payoutAt ?? null}
+        timezone={board.data?.family.timezone ?? 'UTC'}
         onLogout={() => logout.mutate()}
         showAdmin={isParent}
         pendingApprovalCount={pendingApprovalCount}
@@ -324,6 +326,7 @@ function LegalFooter() {
 function TopBar({
   familyName,
   payoutAt,
+  timezone,
   onLogout,
   showAdmin,
   pendingApprovalCount,
@@ -334,6 +337,7 @@ function TopBar({
 }: {
   familyName?: string;
   payoutAt: string | null;
+  timezone: string;
   onLogout: () => void;
   showAdmin: boolean;
   pendingApprovalCount: number;
@@ -412,7 +416,7 @@ function TopBar({
           )}
           {payoutAt && (
             <span className="pill hidden whitespace-nowrap md:inline-flex">
-              Pays out {formatPayoutShort(payoutAt)}
+              Pays out {formatPayoutShort(payoutAt, timezone)}
             </span>
           )}
 
@@ -458,7 +462,7 @@ function TopBar({
                   {familyName && <MenuLabel>{familyName}</MenuLabel>}
                   {payoutAt && (
                     <div className="px-3 pb-1 text-xs text-ink-500">
-                      Pays out {formatPayoutShort(payoutAt)}
+                      Pays out {formatPayoutShort(payoutAt, timezone)}
                     </div>
                   )}
                   <MenuDivider />
@@ -517,17 +521,6 @@ function TopBar({
       </div>
     </header>
   );
-}
-
-function formatPayoutShort(iso: string): string {
-  const d = new Date(iso);
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const day = days[d.getDay()] ?? '';
-  const hour = d.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: d.getMinutes() ? '2-digit' : undefined,
-  });
-  return `${day} ${hour}`;
 }
 
 /**

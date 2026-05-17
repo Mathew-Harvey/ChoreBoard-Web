@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { BoardInstance, InstanceStatus, MemberType, StatedGender } from '../lib/types';
 import { money, relativePast } from '../lib/format';
+import { formatClock, isToday, isTomorrow, useFamilyClock } from '../lib/time';
 import { resolveDisplayGender, type Gender } from '../lib/levelTier';
 import { TierAvatar } from './LevelAvatar';
 
@@ -317,42 +318,30 @@ export function MoneyCell({ amountCents, dim }: { amountCents: number; dim?: boo
 }
 
 /**
- * Compact "Due 7am" or "Due tomorrow" hint. We accept either a Date or an
- * ISO string and fall back gracefully if dueAt is null.
+ * Compact "Due 7am" or "Due tomorrow" hint. Today/tomorrow are evaluated in
+ * the family timezone (not the viewer's browser TZ), so a parent in Perth
+ * looking at a Sydney family sees the same "Today" pill as everyone else.
  */
 export function DueHint({ instance }: { instance: BoardInstance }) {
+  const { now, tz } = useFamilyClock();
   const due = instance.dueAt ? new Date(instance.dueAt) : null;
   if (!due) return null;
-  const now = new Date();
-  const sameDay = sameLocalDay(due, now);
-  if (sameDay) {
-    return <span className="text-xs text-ink-500">due {clockShort(due)}</span>;
+  if (isToday(due, tz, now)) {
+    return <span className="text-xs text-ink-500">due {formatClock(due, tz)}</span>;
   }
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  if (sameLocalDay(due, tomorrow)) {
-    return <span className="text-xs text-ink-500">due tomorrow {clockShort(due)}</span>;
+  if (isTomorrow(due, tz, now)) {
+    return (
+      <span className="text-xs text-ink-500">due tomorrow {formatClock(due, tz)}</span>
+    );
   }
+  const weekday = new Intl.DateTimeFormat(undefined, { timeZone: tz, weekday: 'short' }).format(
+    due,
+  );
   return (
     <span className="text-xs text-ink-500">
-      due {due.toLocaleDateString(undefined, { weekday: 'short' })} {clockShort(due)}
+      due {weekday} {formatClock(due, tz)}
     </span>
   );
-}
-
-function sameLocalDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-
-function clockShort(d: Date): string {
-  return d.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: d.getMinutes() ? '2-digit' : undefined,
-  });
 }
 
 export type MemberLookupRow = {

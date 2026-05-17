@@ -16,6 +16,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
 import { useSession } from '../lib/session';
 import { money, relativePast, timeUntil } from '../lib/format';
+import { formatLongDate, formatPayoutShort } from '../lib/time';
 import type {
   BoardInstance,
   BoardResponse,
@@ -252,13 +253,9 @@ export function KanbanDesktop({
     })),
   ];
 
-  const todayLabel = new Date(board.now).toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  });
+  const todayLabel = formatLongDate(board.now, board.family.timezone);
 
-  const nextRenewal = soonestRenewal(board.instances);
+  const nextRenewal = soonestRenewal(board.instances, board.now);
 
   const onDragStart = (e: DragStartEvent) => {
     const inst = board.instances.find((i) => i.id === e.active.id);
@@ -369,7 +366,7 @@ export function KanbanDesktop({
             title="The board"
             subtitle={
               nextRenewal
-                ? `Next renewal in ${timeUntil(nextRenewal)}${leaderboard.data?.payoutAt ? ` · Pays out ${new Date(leaderboard.data.payoutAt).toLocaleString(undefined, { weekday: 'short', hour: 'numeric' })}` : ''}`
+                ? `Next renewal in ${timeUntil(nextRenewal)}${leaderboard.data?.payoutAt ? ` · Pays out ${formatPayoutShort(leaderboard.data.payoutAt, board.family.timezone)}` : ''}`
                 : undefined
             }
             right={
@@ -447,8 +444,8 @@ export function KanbanDesktop({
   );
 }
 
-function soonestRenewal(list: BoardInstance[]): string | null {
-  const now = Date.now();
+function soonestRenewal(list: BoardInstance[], nowIso: string): string | null {
+  const now = new Date(nowIso).getTime();
   let best: number | null = null;
   for (const i of list) {
     if (!i.dueAt) continue;

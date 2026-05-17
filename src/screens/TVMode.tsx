@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
 import { money, relativePast, timeUntil } from '../lib/format';
+import { formatWeekRange, startOfLocalDay } from '../lib/time';
 import { useSession, useLogout } from '../lib/session';
 import { useSseStatus } from '../lib/sseStatus';
 import {
@@ -238,7 +239,11 @@ export function TVMode({ onExit }: { onExit: () => void }) {
     if ((leaderboard.data?.entries ?? []).length > 0) {
       list.push({ id: 'leaderboard', theme: 'orange' });
     }
-    const approvedToday = todaysApproved(board.data?.instances ?? [], board.data?.now);
+    const approvedToday = todaysApproved(
+      board.data?.instances ?? [],
+      board.data?.now,
+      board.data?.family.timezone ?? 'UTC',
+    );
     if (approvedToday.length > 0) {
       list.push({ id: 'today', theme: 'green' });
     }
@@ -639,13 +644,18 @@ function themeGradient(theme: SlideTheme): string {
   }
 }
 
+/**
+ * "Today's approved" slice in the *family* timezone, anchored on the server
+ * `board.now` instant rather than the viewer's browser clock. Anything
+ * approved at or after family-midnight counts.
+ */
 function todaysApproved(
   instances: BoardResponse['instances'],
-  nowIso?: string,
+  nowIso: string | undefined,
+  tz: string,
 ): BoardResponse['instances'] {
   const now = nowIso ? new Date(nowIso) : new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
+  const start = startOfLocalDay(now, tz);
   return instances
     .filter((i) => i.status === 'approved' && i.approvedAt)
     .filter((i) => i.approvedAt && new Date(i.approvedAt).getTime() >= start.getTime())
@@ -1578,7 +1588,7 @@ function LeaderboardSlide({
 }
 
 function TodaySlide({ board }: { board: BoardResponse }) {
-  const approved = todaysApproved(board.instances, board.now);
+  const approved = todaysApproved(board.instances, board.now, board.family.timezone);
   const total = approved.reduce((acc, i) => acc + i.amountCents, 0);
   const lookup = new Map<string, { name: string; color?: string }>();
   for (const k of board.kids) lookup.set(`kid:${k.id}`, { name: k.name, color: k.color });
@@ -1888,7 +1898,7 @@ function ChampionSlide({
         title="Champion"
         right={
           <span className="inline-flex items-center gap-2 rounded-full bg-cream-50/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-cream-50 ring-1 ring-cream-50/20 sm:text-sm">
-            {weekRange(lastClosed.startsAt, lastClosed.endsAt)}
+            {weekRange(lastClosed.startsAt, lastClosed.endsAt, board.family.timezone)}
           </span>
         }
       />
@@ -1944,7 +1954,7 @@ function ChampionSlide({
                         {m.name}
                       </div>
                       <div className="text-xs text-cream-50/55 sm:text-sm">
-                        {weekRange(w.startsAt, w.endsAt)}
+                        {weekRange(w.startsAt, w.endsAt, board.family.timezone)}
                       </div>
                     </div>
                     <span className="font-display text-base font-extrabold tabular-nums text-money sm:text-lg">
@@ -1961,10 +1971,8 @@ function ChampionSlide({
   );
 }
 
-function weekRange(starts: string, ends: string): string {
-  const a = new Date(starts);
-  const b = new Date(ends);
-  return `${a.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${b.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+function weekRange(starts: string, ends: string, tz: string): string {
+  return formatWeekRange(starts, ends, tz);
 }
 
 function FamilyStatsSlide({

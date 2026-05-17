@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
-import type { Cadence, Chore } from '../../lib/types';
+import type { Cadence, Chore, Family, Kid, Parent } from '../../lib/types';
 import { money, readableCadence } from '../../lib/format';
 import { ChoreIcon } from '../../ui/primitives';
+import { CadencePicker, isCadenceValid } from '../../ui/cadence/CadencePicker';
 import { toastError, toastSuccess } from '../../ui/Toast';
-
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -16,6 +15,16 @@ export function AdminChores() {
     queryKey: ['chores'],
     queryFn: () => api.get<{ chores: Chore[] }>('/api/chores').then((r) => r.chores),
   });
+  // The family timezone drives the cadence picker's "Next 5 runs" preview
+  // and the formatters underneath it. Loaded lazily — the picker degrades
+  // to a browser-clock preview until it lands.
+  const familyQ = useQuery({
+    queryKey: ['family'],
+    queryFn: () =>
+      api.get<{ family: Family; parents: Parent[]; kids: Kid[] }>('/api/family'),
+    staleTime: 60_000,
+  });
+  const timezone = familyQ.data?.family.timezone ?? 'UTC';
 
   const [editing, setEditing] = useState<Chore | null>(null);
   const [creating, setCreating] = useState(false);
@@ -147,6 +156,7 @@ export function AdminChores() {
       {(editing || creating) && (
         <ChoreEditor
           chore={editing}
+          timezone={timezone}
           onSave={(payload) => save.mutate(payload)}
           onCancel={() => {
             setEditing(null);
@@ -162,12 +172,14 @@ export function AdminChores() {
 
 function ChoreEditor({
   chore,
+  timezone,
   onSave,
   onCancel,
   isSaving,
   serverError,
 }: {
   chore: Chore | null;
+  timezone: string;
   onSave: (body: any) => void;
   onCancel: () => void;
   isSaving: boolean;
@@ -229,7 +241,7 @@ function ChoreEditor({
               onChange={(e) => setAmountInput(e.target.value)}
             />
           </Labelled>
-          <CadenceEditor cadence={cadence} onChange={setCadence} />
+          <CadencePicker value={cadence} onChange={setCadence} timezone={timezone} />
           {!cadenceValid && (
             <p className="text-sm text-accent-red">
               Add at least one time / day for this cadence.
@@ -299,244 +311,6 @@ function parseAmount(s: string): { ok: true; cents: number } | { ok: false } {
   const cents = Math.round(parseFloat(trimmed) * 100);
   if (!Number.isFinite(cents) || cents < 0) return { ok: false };
   return { ok: true, cents };
-}
-
-function isCadenceValid(c: Cadence): boolean {
-  switch (c.kind) {
-    case 'daily':
-      return c.times.length > 0 && c.times.every((t) => /^\d{2}:\d{2}$/.test(t));
-    case 'weekly':
-    case 'every_n_weeks':
-      return c.days.length > 0 && /^\d{2}:\d{2}$/.test(c.time);
-    case 'every_n_days':
-      return c.n >= 1 && /^\d{2}:\d{2}$/.test(c.time);
-    case 'monthly_dom':
-      return c.day >= 1 && c.day <= 31 && /^\d{2}:\d{2}$/.test(c.time);
-    case 'monthly_nth':
-      return (
-        c.nth >= 1 && c.nth <= 5 && c.weekday >= 0 && c.weekday <= 6 && /^\d{2}:\d{2}$/.test(c.time)
-      );
-  }
-}
-
-function CadenceEditor({
-  cadence,
-  onChange,
-}: {
-  cadence: Cadence;
-  onChange: (c: Cadence) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2 rounded-xl bg-cream-50 p-3 ring-2 ring-ink-900">
-      <label className="page-tag">CADENCE</label>
-      <select
-        className="input"
-        value={cadence.kind}
-        onChange={(e) => onChange(defaultFor(e.target.value as Cadence['kind']))}
-      >
-        <option value="daily">Daily</option>
-        <option value="weekly">Weekly (specific days)</option>
-        <option value="every_n_days">Every N days</option>
-        <option value="every_n_weeks">Every N weeks (specific days)</option>
-        <option value="monthly_dom">Monthly on day-of-month</option>
-        <option value="monthly_nth">Monthly on Nth weekday</option>
-      </select>
-
-      {cadence.kind === 'daily' && (
-        <div>
-          <label className="text-xs text-ink-500">Time(s) of day</label>
-          <input
-            className="input"
-            value={cadence.times.join(', ')}
-            onChange={(e) =>
-              onChange({
-                kind: 'daily',
-                times: e.target.value
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              })
-            }
-            placeholder="e.g. 07:00, 17:00"
-          />
-        </div>
-      )}
-      {cadence.kind === 'weekly' && (
-        <>
-          <DayPicker
-            value={cadence.days}
-            onChange={(days) => onChange({ kind: 'weekly', days, time: cadence.time })}
-          />
-          <TimeField
-            value={cadence.time}
-            onChange={(time) => onChange({ kind: 'weekly', days: cadence.days, time })}
-          />
-        </>
-      )}
-      {cadence.kind === 'every_n_days' && (
-        <>
-          <NField
-            label="Every N days"
-            value={cadence.n}
-            onChange={(n) => onChange({ kind: 'every_n_days', n, time: cadence.time })}
-          />
-          <TimeField
-            value={cadence.time}
-            onChange={(time) => onChange({ kind: 'every_n_days', n: cadence.n, time })}
-          />
-        </>
-      )}
-      {cadence.kind === 'every_n_weeks' && (
-        <>
-          <NField
-            label="Every N weeks"
-            value={cadence.n}
-            onChange={(n) =>
-              onChange({ kind: 'every_n_weeks', n, days: cadence.days, time: cadence.time })
-            }
-          />
-          <DayPicker
-            value={cadence.days}
-            onChange={(days) =>
-              onChange({ kind: 'every_n_weeks', n: cadence.n, days, time: cadence.time })
-            }
-          />
-          <TimeField
-            value={cadence.time}
-            onChange={(time) =>
-              onChange({ kind: 'every_n_weeks', n: cadence.n, days: cadence.days, time })
-            }
-          />
-        </>
-      )}
-      {cadence.kind === 'monthly_dom' && (
-        <>
-          <NField
-            label="Day of month"
-            value={cadence.day}
-            onChange={(day) => onChange({ kind: 'monthly_dom', day, time: cadence.time })}
-          />
-          <TimeField
-            value={cadence.time}
-            onChange={(time) => onChange({ kind: 'monthly_dom', day: cadence.day, time })}
-          />
-        </>
-      )}
-      {cadence.kind === 'monthly_nth' && (
-        <>
-          <NField
-            label="Nth"
-            value={cadence.nth}
-            onChange={(nth) =>
-              onChange({ kind: 'monthly_nth', nth, weekday: cadence.weekday, time: cadence.time })
-            }
-          />
-          <DayPicker
-            single
-            value={[cadence.weekday]}
-            onChange={(days) => {
-              const wd = days[0] ?? 0;
-              onChange({ kind: 'monthly_nth', nth: cadence.nth, weekday: wd, time: cadence.time });
-            }}
-          />
-          <TimeField
-            value={cadence.time}
-            onChange={(time) =>
-              onChange({ kind: 'monthly_nth', nth: cadence.nth, weekday: cadence.weekday, time })
-            }
-          />
-        </>
-      )}
-
-      <p className="text-xs text-ink-500">{readableCadence(cadence)}</p>
-    </div>
-  );
-}
-
-function defaultFor(k: Cadence['kind']): Cadence {
-  switch (k) {
-    case 'daily':
-      return { kind: 'daily', times: ['09:00'] };
-    case 'weekly':
-      return { kind: 'weekly', days: [1, 3, 5], time: '09:00' };
-    case 'every_n_days':
-      return { kind: 'every_n_days', n: 2, time: '09:00' };
-    case 'every_n_weeks':
-      return { kind: 'every_n_weeks', n: 2, days: [6], time: '10:00' };
-    case 'monthly_dom':
-      return { kind: 'monthly_dom', day: 1, time: '10:00' };
-    case 'monthly_nth':
-      return { kind: 'monthly_nth', nth: 1, weekday: 6, time: '10:00' };
-  }
-}
-
-function DayPicker({
-  value,
-  onChange,
-  single = false,
-}: {
-  value: number[];
-  onChange: (days: number[]) => void;
-  single?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-7 gap-1">
-      {DAYS.map((d, i) => {
-        const selected = value.includes(i);
-        return (
-          <button
-            type="button"
-            key={d}
-            onClick={() => {
-              if (single) return onChange([i]);
-              onChange(selected ? value.filter((x) => x !== i) : [...value, i].sort());
-            }}
-            className={`rounded-lg px-1 py-2 text-xs font-bold ring-2 ring-ink-900 transition active:translate-y-px ${
-              selected
-                ? 'bg-ink-900 text-cream-50 shadow-paper-sm'
-                : 'bg-paper text-ink-700 hover:bg-cream-50'
-            }`}
-            aria-pressed={selected}
-          >
-            {d}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function TimeField({ value, onChange }: { value: string; onChange: (s: string) => void }) {
-  return (
-    <input
-      type="time"
-      className="input"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
-}
-
-function NField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (n: number) => void;
-}) {
-  return (
-    <Labelled label={label}>
-      <input
-        className="input"
-        type="number"
-        min={1}
-        value={value}
-        onChange={(e) => onChange(Math.max(1, Number(e.target.value) || 1))}
-      />
-    </Labelled>
-  );
 }
 
 function Labelled({

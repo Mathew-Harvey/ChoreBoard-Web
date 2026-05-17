@@ -17,11 +17,6 @@ export function timeUntil(target: Date | string, now: Date = new Date()): string
   return `${m}m`;
 }
 
-export function clockTime(d: Date | string): string {
-  const date = typeof d === 'string' ? new Date(d) : d;
-  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-}
-
 export function relativePast(d: Date | string, now: Date = new Date()): string {
   const date = typeof d === 'string' ? new Date(d) : d;
   const sec = Math.round((now.getTime() - date.getTime()) / 1000);
@@ -34,27 +29,43 @@ export function relativePast(d: Date | string, now: Date = new Date()): string {
   return `${d2}d ago`;
 }
 
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+/**
+ * Render the wall-clock string `HH:MM` in the viewer's locale's AM/PM
+ * convention. The hour-of-day is the same number everywhere on earth —
+ * this is a stylistic format, not a TZ conversion.
+ */
+function clockLabel(hhmm: string): string {
+  if (!/^\d{2}:\d{2}$/.test(hhmm)) return hhmm;
+  const [h, m] = hhmm.split(':').map(Number);
+  const date = new Date(2000, 0, 1, h, m);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: m ? '2-digit' : undefined,
+  }).format(date);
+}
+
 export function readableCadence(c: any): string {
   if (!c) return '';
   switch (c.kind) {
-    case 'daily':
-      return c.times.length > 1 ? `Daily ×${c.times.length} (${c.times.join(', ')})` : `Daily ${c.times[0] ?? ''}`;
-    case 'weekly': {
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      return `${(c.days as number[]).map((d) => dayNames[d]).join('/')} ${c.time}`;
+    case 'daily': {
+      const times = (c.times as string[]).map(clockLabel);
+      if (times.length === 0) return 'Daily';
+      if (times.length === 1) return `Daily at ${times[0]}`;
+      return `${times.length}× daily (${times.join(', ')})`;
     }
+    case 'weekly':
+      return `${(c.days as number[]).map((d) => DAY_NAMES[d]).join('/')} at ${clockLabel(c.time)}`;
     case 'every_n_days':
-      return `Every ${c.n} days @ ${c.time}`;
-    case 'every_n_weeks': {
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      return `Every ${c.n} weeks on ${(c.days as number[]).map((d) => dayNames[d]).join('/')} ${c.time}`;
-    }
+      return `Every ${c.n} days at ${clockLabel(c.time)}`;
+    case 'every_n_weeks':
+      return `Every ${c.n} weeks on ${(c.days as number[]).map((d) => DAY_NAMES[d]).join('/')} at ${clockLabel(c.time)}`;
     case 'monthly_dom':
-      return `Monthly day ${c.day} @ ${c.time}`;
+      return `Day ${c.day} of every month at ${clockLabel(c.time)}`;
     case 'monthly_nth': {
-      const ord = ['1st', '2nd', '3rd', '4th', '5th'][c.nth - 1] ?? `${c.nth}th`;
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      return `${ord} ${dayNames[c.weekday]} of month @ ${c.time}`;
+      const ord = ['1st', '2nd', '3rd', '4th', 'Last'][c.nth - 1] ?? `${c.nth}th`;
+      return `${ord} ${DAY_NAMES[c.weekday]} of every month at ${clockLabel(c.time)}`;
     }
     default:
       return '';
