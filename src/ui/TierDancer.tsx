@@ -29,14 +29,18 @@ import {
 //   * `<video src=".webm">` — VP9 + alpha. The pick on Chromium / Firefox /
 //                              Edge: small files, granular play/pause/
 //                              `onEnded` semantics.
-//   * `<img src=".webp">`   — animated WebP + alpha. The pick on Apple
-//                              WebKit (iPadOS Safari + Capacitor's
-//                              WKWebView), because Safari cannot decode
-//                              VP9-alpha WebM (iOS 16 silently drops the
-//                              alpha plane, older iOS fails the source).
-//                              `<img>` gives us alpha that actually
-//                              renders; we simulate "ended" with a timer
-//                              keyed to the clip duration.
+//   * `<img src=".webp">`  — Animated WebP + alpha, assembled via
+//                              cwebp + webpmux with explicit
+//                              Dispose=1/Blend=source (see
+//                              `scripts/process-dance-videos.ps1`). The
+//                              pick on Apple WebKit (iPadOS Safari +
+//                              Capacitor's WKWebView), because Safari
+//                              cannot decode VP9-alpha WebM (iOS 16
+//                              silently drops the alpha plane, older
+//                              iOS fails the source outright). `<img>`
+//                              gives us alpha that actually renders; we
+//                              simulate "ended" with a timer keyed to
+//                              the clip duration.
 //
 // Three modes:
 //   - `interactive` (default) — hover/tap to play, returns to still after.
@@ -231,9 +235,10 @@ export function TierDancer({
     }
   }, [mode, hoverCapable]);
 
-  // Animated-WebP path: <img> can't fire `onEnded`, so we time the "play
-  // once" modes manually. Celebration and hover-capable interactive both
-  // loop forever (animated WebP auto-loops), no timer needed.
+  // Animated-WebP path: <img> can't fire `onEnded`, so we time the
+  // "play once" modes manually. Celebration and hover-capable
+  // interactive both loop forever (loop count 0 in the WebP header),
+  // no timer needed.
   useEffect(() => {
     if (!useImage) return;
     if (!(wantPlay && onScreen && ready)) return;
@@ -348,9 +353,9 @@ export function TierDancer({
         ? overlaySrc && (wantPlay || isCelebration) && onScreen
           ? (
               <img
-                // `key` forces a fresh <img> on each play so animated WebP
-                // restarts cleanly even when the src URL hasn't changed
-                // (e.g. tap-tap-tap on touch interactive mode).
+                // `key` forces a fresh <img> on each play so the animated
+                // WebP restarts cleanly even when the src URL hasn't
+                // changed (e.g. tap-tap-tap on touch interactive mode).
                 key={`${overlaySrc}:${playing}`}
                 src={overlaySrc}
                 alt=""

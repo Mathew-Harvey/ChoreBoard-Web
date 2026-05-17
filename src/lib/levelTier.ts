@@ -40,11 +40,18 @@ import lvl6Female from '../assets/avatars/lvl6f.png';
 //   .webm  - VP9 + alpha (yuva420p, ~6s, 300-650 KB). The first-choice
 //            format for Chromium / Firefox / Edge.
 //
-//   .webp  - Animated WebP with alpha (~600-1400 KB). Used on Apple
-//            WebKit (iPadOS Safari + Capacitor WKWebView), which cannot
-//            decode VP9-alpha WebM — iOS 16 drops the alpha plane, older
-//            iOS fails the source outright. `<TierDancer>` switches to
-//            the WebP at runtime; everyone else stays on the WebM.
+//   .webp  - Animated WebP with alpha (~1.5-2 MB at 12 fps). Used on
+//            Apple WebKit (iPadOS Safari + Capacitor WKWebView), which
+//            cannot decode VP9-alpha WebM (iOS 16 drops the alpha plane,
+//            older iOS fails the source outright).
+//
+//            See `scripts/process-dance-videos.ps1` for the iPad-Safari
+//            history: ffmpeg's `libwebp_anim` encoder doesn't expose
+//            frame-disposal flags, which left Safari ghosting every
+//            prior frame and pacing playback like a slideshow. The
+//            generated WebPs now come from a cwebp + webpmux pipeline
+//            that writes Dispose=1 (restore-to-background) + Blend=1
+//            (source-replace) on every frame.
 //
 // Both are emitted by `scripts/process-dance-videos.ps1`. Importing as URLs
 // lets Vite fingerprint them and keeps the static avatar PNG the only thing
@@ -64,9 +71,9 @@ import lvl6FemaleDance from '../assets/avatars/video/lvl6fdance.webm';
 
 // Animated WebP variants — globbed (not statically imported) so the build
 // still succeeds when someone clones the repo before running
-// `scripts/process-dance-videos.ps1`. If a .webp is missing the lookup
-// returns null and the Apple-WebKit fallback in <TierDancer> degrades
-// gracefully to the still portrait.
+// `scripts/process-dance-videos.ps1`. If a `lvl*dance.webp` is missing
+// the lookup returns null and the Apple-WebKit fallback in <TierDancer>
+// degrades gracefully to the still portrait.
 const ANIMATED_DANCES = import.meta.glob<string>(
   '../assets/avatars/video/lvl*dance.webp',
   { eager: true, query: '?url', import: 'default' },
