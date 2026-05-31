@@ -66,6 +66,7 @@ type SetStatusPayload = {
   claimant?: { memberType: 'user' | 'kid'; memberId: string };
 };
 type SpawnFn = (choreId: string) => void;
+type ClaimFn = (instanceId: string, memberType: 'user' | 'kid', memberId: string) => void;
 
 type Column =
   | { kind: 'available' }
@@ -233,6 +234,8 @@ export function KanbanDesktop({
   const onSetStatus: SetStatusFn = (instanceId, payload) =>
     setStatus.mutate({ instanceId, payload });
   const onSpawn: SpawnFn = (choreId) => spawn.mutate(choreId);
+  const onClaim: ClaimFn = (instanceId, memberType, memberId) =>
+    action.mutate({ instanceId, action: 'claim', body: { memberType, memberId } });
 
   // Parent-only convenience: approve everything pending in one go.
   const approveAll = () => {
@@ -415,6 +418,7 @@ export function KanbanDesktop({
               onSetStatus={onSetStatus}
               onSpawn={isParent ? onSpawn : undefined}
               activeChores={isParent ? activeChores : []}
+              onClaim={onClaim}
             />
             {memberColumns.map((c) => (
               <MemberColumn
@@ -643,6 +647,7 @@ function AvailableColumn({
   onSetStatus,
   onSpawn,
   activeChores,
+  onClaim,
 }: {
   instances: BoardInstance[];
   isParent: boolean;
@@ -651,6 +656,7 @@ function AvailableColumn({
   onSetStatus: SetStatusFn;
   onSpawn?: SpawnFn;
   activeChores: Chore[];
+  onClaim?: ClaimFn;
 }) {
   const items = useMemo(
     () =>
@@ -698,6 +704,7 @@ function AvailableColumn({
             isParent={isParent}
             roster={roster}
             onSetStatus={onSetStatus}
+            onClaim={onClaim}
           />
         ))}
       </div>
@@ -1201,6 +1208,7 @@ function DraggableCard({
   onSubmit,
   canUnclaim,
   onUnclaim,
+  onClaim,
 }: {
   instance: BoardInstance;
   draggable: boolean;
@@ -1217,6 +1225,7 @@ function DraggableCard({
   onSubmit?: (id: string) => void;
   canUnclaim?: boolean;
   onUnclaim?: (id: string) => void;
+  onClaim?: ClaimFn;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: instance.id,
@@ -1257,6 +1266,7 @@ function DraggableCard({
         onSubmit={onSubmit}
         canUnclaim={canUnclaim}
         onUnclaim={onUnclaim}
+        onClaim={onClaim}
       />
     </div>
   );
@@ -1279,6 +1289,7 @@ function CardShell({
   onSubmit,
   canUnclaim,
   onUnclaim,
+  onClaim,
 }: {
   instance: BoardInstance;
   draggable: boolean;
@@ -1296,6 +1307,7 @@ function CardShell({
   onSubmit?: (id: string) => void;
   canUnclaim?: boolean;
   onUnclaim?: (id: string) => void;
+  onClaim?: ClaimFn;
 }) {
   const overdue = instance.overdue;
   return (
@@ -1344,6 +1356,12 @@ function CardShell({
           <DueHint instance={instance} />
         </div>
         <EvidenceHint instance={instance} />
+        {instance.status === 'available' && onClaim && roster && roster.length > 0 && !overlay && (
+          <AssignPicker
+            roster={roster}
+            onClaim={(memberType, memberId) => onClaim(instance.id, memberType, memberId)}
+          />
+        )}
         {(canSubmit || canUnclaim) && !overlay && (
           <div className="mt-2 flex gap-2">
             {canSubmit && (
@@ -1407,6 +1425,49 @@ function CardShell({
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * Compact member-picker shown on available chore cards. Renders each family
+ * member as a small pill (colour dot + name) that claims the chore for that
+ * person when tapped. onPointerDown stops propagation so the tap doesn't
+ * accidentally start a drag.
+ */
+function AssignPicker({
+  roster,
+  onClaim,
+}: {
+  roster: RosterMember[];
+  onClaim: (memberType: 'user' | 'kid', memberId: string) => void;
+}) {
+  return (
+    <div className="mt-2">
+      <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-ink-400">
+        Assign to
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {roster.map((m) => (
+          <button
+            key={`${m.type}:${m.id}`}
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClaim(m.type, m.id);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-full bg-ink-900/5 px-2.5 py-1 text-[11px] font-semibold text-ink-700 ring-1 ring-ink-900/10 transition hover:bg-ink-900/10 hover:ring-ink-900/20 active:scale-95"
+          >
+            <span
+              aria-hidden
+              className="h-2 w-2 flex-shrink-0 rounded-full"
+              style={{ backgroundColor: m.color ?? '#5B6072' }}
+            />
+            {m.name}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
